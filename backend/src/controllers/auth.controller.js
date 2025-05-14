@@ -1,7 +1,9 @@
 import User from "../models/user.model.js";
 import bcrypt from "bcryptjs";
-import { generateToken } from "../lib/utils.js";
 import cloudinary from "../lib/cloudinary.js";
+import { generateToken } from "../lib/utils.js";
+
+
 
 // SIGNUP
 export const signup = async (req, res) => {
@@ -78,7 +80,11 @@ export const login = async (req, res) => {
 // LOGOUT
 export const logout = (req, res) => {
   try {
-    res.cookie("jwt", "", { maxAge: 0 });
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax",
+    });
     res.status(200).json({ message: "Logged out successfully" });
   } catch (error) {
     console.error("❌ Error in logout controller:", error.message);

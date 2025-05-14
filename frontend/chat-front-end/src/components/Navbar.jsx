@@ -23,29 +23,6 @@ const Navbar = () => {
             </div>
             <h1 className="text-lg font-bold">Enguinity</h1>
           </Link>
-
-          {/* Right side - buttons */}
-          <div className="flex items-center gap-2">
-            <Link
-              to={"/settings"}
-              className="btn btn-sm gap-2 transition-colors"
-            >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Settings</span>
-            </Link>
-            {authUser && (
-              <>
-                <Link to={"/profile"} className="btn btn-sm gap-2">
-                  <User className="size-5" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Link>
-                <button className="btn btn-sm gap-2" onClick={logout}>
-                  <LogOut className="size-5" />
-                  <span className="hidden sm:inline">Logout</span>
-                </button>
-              </>
-            )}
-          </div>
         </div>
       </div>
     </header>
