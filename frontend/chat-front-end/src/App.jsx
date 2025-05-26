@@ -4,23 +4,21 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 // Components & Pages
 import Navbar from "./components/Navbar";
-import SideBarMain from "./components/SideBarMain.jsx"; // Main application sidebar (collapsible)
+import SideBarMain from "./components/SideBarMain.jsx"; 
 import SignUpPage from "./pages/SignUpPage";
-import HomePage from "./pages/HomePage";
+import ChatPage from "./pages/ChatPage.jsx";
 import LoginPage from "./pages/LoginPage";
 import SettingsPage from "./pages/SettingsPage";
 import ProfilePage from "./pages/ProfilePage";
 import ProjectPage from "./pages/ProjectPage";
 import DashboardPage from "./pages/Dashboard.jsx";
-// Import other pages like PayrollPage, VideoConferencePage, FileHandlingPage if they exist
 import PayrollPage from "./pages/PayrollPage.jsx";
 import VideoConferencePage from "./pages/VideoConferencePage.jsx";
 import FileHandlingPage from "./pages/FileHandlingPage.jsx";
 import ProjectDetailsPage from "./pages/ProjectDetails.jsx";
 
 
-// State & Utils
-// import { axiosInstance } from "./lib/axios"; // Uncomment if used directly in App.jsx
+
 import { useAuthStore } from "./store/useAuthStore";
 import { Loader } from "lucide-react";
 import { Toaster } from "react-hot-toast";
@@ -71,11 +69,11 @@ const App = () => {
             <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-base-200">
               <Routes>
                 {/* Authenticated Routes */}
-                <Route path="/" element={<HomePage />} />
+                <Route path="/chats" element={<ChatPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/projects" element={<ProjectPage />} />
-                <Route path="/projects/:id" element={<ProjectDetailsPage />} />
+                <Route path="/projects/:projectId" element={<ProjectDetailsPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/payroll" element={<PayrollPage />}/>
                 <Route path="/video-meetings" element={<VideoConferencePage/>} />

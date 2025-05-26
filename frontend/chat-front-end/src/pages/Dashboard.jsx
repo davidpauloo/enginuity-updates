@@ -121,9 +121,9 @@ const DashboardPage = () => {
 
   // Dynamic stats array based on fetched data
   const stats = [
-    { title: 'Active Projects', value: activeProjectsCount, buttonText: 'See Projects', path: '/projects?status=active' }, // Example path
-    { title: 'Upcoming Projects', value: upcomingProjectsCount, buttonText: 'See Completed Projects', path: '/projects?status=upcoming' }, // Example path
-    { title: 'Total Projects', value: totalProjectsCount, path: '/projects' },
+    { title: 'Active Projects', value: activeProjectsCount, buttonText: 'See Projects', path: '/projects?status=active' },
+    { title: 'Upcoming Projects', value: upcomingProjectsCount },
+    { title: 'Total Projects', value: totalProjectsCount, buttonText: 'See Completed Projects', path: '/projects?status=completed' },
   ];
 
   // Placeholder data for other sections (can also be fetched if needed)

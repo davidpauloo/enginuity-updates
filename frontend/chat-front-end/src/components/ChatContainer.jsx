@@ -20,7 +20,7 @@ const ChatContainer = () => {
   const messageEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [isFirstLoad, setIsFirstLoad] = useState(true); // Flag to track first load
+  const [isFirstLoad, setIsFirstLoad] = useState(true);
 
   useEffect(() => {
     getMessages(selectedUser._id);
@@ -30,29 +30,23 @@ const ChatContainer = () => {
   }, [selectedUser._id, getMessages, subscribeToMessages, unsubscribeFromMessages]);
 
   useEffect(() => {
-    if (isAtBottom && !isFirstLoad) {
-      // Scroll only when new messages arrive and not on initial load
-      messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    } else {
-      setIsFirstLoad(false); // Set the flag to false after initial load
+    if (messages.length > 0) {
+      if (isFirstLoad) {
+        // On first load, scroll to bottom
+        messageEndRef.current?.scrollIntoView({ behavior: "instant" });
+        setIsFirstLoad(false);
+      } else if (isAtBottom) {
+        // Only scroll if user is already at bottom
+        messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
     }
   }, [messages, isAtBottom, isFirstLoad]);
 
   const handleScroll = (event) => {
     const container = event.target;
     const bottom =
-      container.scrollHeight === container.scrollTop + container.clientHeight;
-
+      Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) < 10;
     setIsAtBottom(bottom);
-  };
-
-  // Prevent body scroll when chat container scrolls
-  const preventBodyScroll = (event) => {
-    if (event.target.scrollHeight > event.target.clientHeight) {
-      document.body.style.overflow = "hidden"; // Disable body scrolling when chat is scrollable
-    } else {
-      document.body.style.overflow = "auto"; // Enable body scroll when necessary
-    }
   };
 
   if (isMessagesLoading) {
@@ -68,11 +62,8 @@ const ChatContainer = () => {
   return (
     <div
       ref={chatContainerRef}
-      className="flex-1 flex flex-col overflow-hidden" // Only chat scrolls, not the page
-      onScroll={(event) => {
-        handleScroll(event);
-        preventBodyScroll(event); // Prevent page scroll
-      }}
+      className="flex-1 flex flex-col overflow-hidden"
+      onScroll={handleScroll}
     >
       <ChatHeader />
 
@@ -111,7 +102,7 @@ const ChatContainer = () => {
             </div>
           </div>
         ))}
-        <div ref={messageEndRef} /> {/* Ensures scrolling to the bottom */}
+        <div ref={messageEndRef} />
       </div>
 
       <MessageInput />

@@ -31,7 +31,7 @@ const SideBarMain = () => {
 
   const sidebarMenuItems = [
     { icon: <LayoutDashboard size={20} />, label: 'Dashboard', path: '/dashboard' },
-    { icon: <MessageSquareText size={20} />, label: 'Chats', path: '/' },
+    { icon: <MessageSquareText size={20} />, label: 'Chats', path: '/chats' },
     { icon: <ListChecks size={20} />, label: 'Projects', path: '/projects' },
     { icon: <PhilippinePeso size={20} />, label: 'Payroll', path: '/payroll' },
     { icon: <Video size={20} />, label: 'Video Meetings', path: '/video-meetings' },

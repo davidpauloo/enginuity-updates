@@ -1,61 +1,72 @@
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import fs from 'fs';
-import path from 'path';
-import multer from 'multer';
+// src/controllers/project.controller.js
+
+// REMOVE THESE IMPORTS FROM HERE IF THEY ARE ONLY FOR MULTER SETUP
+// import { fileURLToPath } from 'url';
+// import { dirname } from 'path';
+// import fs from 'fs'; // KEEP this if used for fs.unlinkSync later in the file
+// import path from 'path'; // KEEP this if used for path.extname or other path ops later
+// REMOVE THIS: import multer from 'multer';
+
 import Project from '../models/project.model.js';
 import asyncHandler from '../middleware/asyncHandler.js';
 import mongoose from 'mongoose';
+import User from '../models/user.model.js'; // Keep this if you still use it for `createdBy` or `activities.assignedTo`
 
-// Set up __dirname for ES Modules
+// Set up __dirname for ES Modules (Keep if needed for other non-multer path logic)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Multer storage configuration
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, '..', '..', 'uploads', 'project_documents'); // Absolute path
-    fs.existsSync(uploadDir) || fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
-  }
-});
+// REMOVE ALL MULTER CONFIGURATION BLOCKS FROM HERE
+// Including: UPLOADS_BASE_DIR, PROJECT_DOCUMENTS_DIR, fs.mkdirSync calls, storage, upload
 
-// Multer upload configuration
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|ppt|pptx|txt/;
-    const mimetype = allowedTypes.test(file.mimetype);
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error('File type not allowed.'));
+// Helper function for ID validation
+const validateObjectId = (id, paramName = 'ID') => {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error(`Invalid ${paramName} format`);
   }
-});
+};
 
 // @desc    Create a new project
 // @route   POST /api/projects
 // @access  Private
 const createProject = asyncHandler(async (req, res) => {
-  const { clientName, location, description, startDate, targetDeadline } = req.body;
+  const {
+    clientName,
+    location,
+    description,
+    startDate,
+    targetDeadline,
+    budget,
+    status
+  } = req.body;
 
+  // FIX: Make sure targetDeadline is correctly validated as required.
+  // The '!!' operator converts to boolean, so `!!targetDeadline` means "if targetDeadline is truthy".
+  // If it's a required field, you want `!targetDeadline` (if targetDeadline is falsy/missing).
   if (!clientName || !location || !startDate || !targetDeadline) {
     res.status(400);
-    throw new Error('Please provide all required project fields');
+    throw new Error('Please provide all required project fields: Client Name, Location, Start Date, Target Deadline.');
+  }
+  if (isNaN(new Date(startDate).getTime()) || isNaN(new Date(targetDeadline).getTime())) {
+    res.status(400);
+    throw new Error('Invalid date format for Start Date or Target Deadline.');
+  }
+  if (budget && isNaN(parseFloat(budget.estimated))) {
+      res.status(400);
+      throw new Error('Budget estimated value must be a number.');
   }
 
   const project = new Project({
     clientName,
     location,
     description,
-    startDate,
-    targetDeadline,
+    startDate: new Date(startDate),
+    targetDeadline: new Date(targetDeadline),
+    budget: budget ? {
+        estimated: parseFloat(budget.estimated),
+        currency: budget.currency || 'USD'
+    } : undefined,
+    status: status || 'planning',
     createdBy: req.user._id,
   });
 
@@ -63,64 +74,69 @@ const createProject = asyncHandler(async (req, res) => {
   res.status(201).json(createdProject);
 });
 
-// @desc    Get all projects
-// @route   GET /api/projects
+// @desc    Add activity to project
+// @route   POST /api/projects/:id/activities
 // @access  Private
-const getProjects = asyncHandler(async (req, res) => {
-  const projects = await Project.find({}).sort({ createdAt: -1 });
-  res.status(200).json(projects);
-});
+const addActivityToProject = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { name, description, startDate, endDate } = req.body;
 
-// @desc    Get a single project by ID
-// @route   GET /api/projects/:id
-// @access  Private
-const getProjectById = asyncHandler(async (req, res) => {
-  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-    res.status(400);
-    throw new Error('Invalid project ID format');
-  }
+  validateObjectId(projectId, 'project ID');
 
-  const project = await Project.findById(req.params.id);
-  if (project) {
-    res.status(200).json(project);
-  } else {
+  const project = await Project.findById(projectId);
+  if (!project) {
     res.status(404);
     throw new Error('Project not found');
   }
+
+  if (!name || !startDate || !endDate) {
+    res.status(400);
+    throw new Error('Name, Start Date, and End Date are required for an activity');
+  }
+
+  const newActivity = {
+    title: name,
+    description,
+    startDate: new Date(startDate),
+    dueDate: new Date(endDate),
+    status: 'pending',
+  };
+
+  project.activities.push(newActivity);
+  await project.save();
+
+  res.status(201).json(newActivity);
 });
 
-// @desc    Upload a document to a project
+// ... (keep getProjects, getProjectById, updateProject, addEmployeeToProject, removeEmployeeFromProject, updateActivity functions as they are) ...
+
+// @desc    Upload document to project
 // @route   POST /api/projects/:id/documents
 // @access  Private
 const uploadDocumentToProject = asyncHandler(async (req, res) => {
   const { id: projectId } = req.params;
+  validateObjectId(projectId, 'project ID');
 
-  if (!req.file) {
-    res.status(400);
-    throw new Error('No file uploaded. Please select a file.');
-  }
+  const file = req.file; // This 'req.file' is provided by Multer from the routes file
 
-  if (!mongoose.Types.ObjectId.isValid(projectId)) {
+  if (!file) {
     res.status(400);
-    throw new Error('Invalid project ID format for document upload.');
+    throw new Error('No file uploaded.');
   }
 
   const project = await Project.findById(projectId);
   if (!project) {
     res.status(404);
-    throw new Error('Project not found to upload document to.');
+    throw new Error('Project not found');
   }
 
-  const filePathForDb = `uploads/project_documents/${req.file.filename}`;
-  const fileUrlForClient = `/uploads/project_documents/${req.file.filename}`;
+  project.documents.push({
+    fileName: file.originalname,
+    filePath: file.path,
+    fileType: file.mimetype,
+    uploadedAt: new Date()
+  });
 
-  const newDocument = {
-    fileName: req.file.originalname,
-    filePath: fileUrlForClient,
-    fileType: req.file.mimetype,
-  };
-
-  project.documents.push(newDocument);
   const updatedProject = await project.save();
 
   res.status(201).json({
@@ -129,83 +145,89 @@ const uploadDocumentToProject = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Delete a document from a project
-// @route   DELETE /api/projects/:projectId/documents/:documentId
+// @desc    Delete document from project
+// @route   DELETE /api/projects/:id/documents/:documentId
 // @access  Private
 const deleteDocumentFromProject = asyncHandler(async (req, res) => {
-  const { projectId, documentId } = req.params;
-
-  if (!mongoose.Types.ObjectId.isValid(projectId) || !mongoose.Types.ObjectId.isValid(documentId)) {
-    res.status(400);
-    throw new Error('Invalid project or document ID.');
-  }
+  const { id: projectId, documentId } = req.params;
+  validateObjectId(projectId, 'project ID');
+  validateObjectId(documentId, 'document ID');
 
   const project = await Project.findById(projectId);
   if (!project) {
     res.status(404);
-    throw new Error('Project not found.');
+    throw new Error('Project not found');
   }
 
   const document = project.documents.id(documentId);
   if (!document) {
     res.status(404);
-    throw new Error('Document not found in the project.');
+    throw new Error('Document not found in this project.');
   }
 
-  const filePath = path.join(__dirname, '..', '..', document.filePath);
-  console.log('Attempting to delete file at:', filePath);  // Debugging log
-
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);  // Delete the file
-    console.log('File deleted successfully');
-  } else {
-    console.log('File does not exist at the specified path');
+  // KEEP fs.unlinkSync here as it's a file system operation needed by the controller
+  try {
+    if (fs.existsSync(document.filePath)) {
+        fs.unlinkSync(document.filePath);
+    } else {
+        console.warn(`File not found on disk for document ID: ${documentId}, path: ${document.filePath}`);
+    }
+  } catch (err) {
+    console.error('Error deleting file from filesystem:', err);
   }
 
-  project.documents.pull(documentId); // Correctly remove the document from the project
+  project.documents.pull({ _id: documentId });
+
   const updatedProject = await project.save();
 
   res.status(200).json({
-    message: 'Document deleted successfully.',
-    project: updatedProject,
+    message: 'Document deleted successfully',
+    project: updatedProject
   });
 });
 
-// @desc    Delete a project and its documents
+// @desc    Delete project
 // @route   DELETE /api/projects/:id
 // @access  Private
 const deleteProject = asyncHandler(async (req, res) => {
-  const { id } = req.params;
+  const { id: projectId } = req.params;
+  validateObjectId(projectId, 'project ID');
 
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    res.status(400);
-    throw new Error('Invalid project ID.');
-  }
-
-  const project = await Project.findById(id);
+  const project = await Project.findById(projectId);
   if (!project) {
     res.status(404);
-    throw new Error('Project not found.');
+    throw new Error('Project not found');
   }
 
-  // Delete associated files
-  for (const doc of project.documents) {
-    const filePath = path.join(__dirname, '..', '..', doc.filePath);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+  // KEEP fs.unlinkSync here for deleting associated files
+  project.documents.forEach(doc => {
+    try {
+      if (doc.filePath && fs.existsSync(doc.filePath)) {
+        fs.unlinkSync(doc.filePath);
+      }
+    } catch (err) {
+      console.error(`Error deleting file ${doc.filePath} during project deletion:`, err);
     }
-  }
+  });
 
-  await project.deleteOne();
+  await Project.deleteOne({ _id: projectId });
 
-  res.status(200).json({ message: 'Project and associated documents deleted successfully.' });
+  res.status(200).json({
+    message: 'Project and all associated data deleted successfully'
+  });
 });
 
-// Export all controller functions
+
+// Exporting functions
 export {
   createProject,
   getProjects,
   getProjectById,
+  updateProject,
+  addEmployeeToProject,
+  removeEmployeeFromProject,
+  addActivityToProject,
+  updateActivity,
   uploadDocumentToProject,
   deleteDocumentFromProject,
   deleteProject
