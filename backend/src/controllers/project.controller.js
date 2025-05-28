@@ -79,33 +79,122 @@ const createProject = asyncHandler(async (req, res) => {
 // @access  Private
 const addActivityToProject = asyncHandler(async (req, res) => {
   const { projectId } = req.params;
-  const { name, description, startDate, endDate } = req.body;
+  const { name, description, startDate, dueDate } = req.body;
 
+  // Validate project ID
   validateObjectId(projectId, 'project ID');
 
+  // Find the project
   const project = await Project.findById(projectId);
   if (!project) {
     res.status(404);
     throw new Error('Project not found');
   }
 
-  if (!name || !startDate || !endDate) {
+  // Validate required fields
+  if (!name || !startDate || !dueDate) {
     res.status(400);
-    throw new Error('Name, Start Date, and End Date are required for an activity');
+    throw new Error('Name, Start Date, and Due Date are required for an activity');
   }
 
+  // Validate date formats
+  if (isNaN(new Date(startDate).getTime()) || isNaN(new Date(dueDate).getTime())) {
+    res.status(400);
+    throw new Error('Invalid date format for Start Date or Due Date');
+  }
+
+  // Create new activity object
   const newActivity = {
-    title: name,
-    description,
+    name: name.trim(),
+    description: description ? description.trim() : '',
     startDate: new Date(startDate),
-    dueDate: new Date(endDate),
+    dueDate: new Date(dueDate),
     status: 'pending',
+    createdAt: new Date()
   };
 
+  // Add activity to project
   project.activities.push(newActivity);
-  await project.save();
+  
+  // Save the project
+  const updatedProject = await project.save();
 
-  res.status(201).json(newActivity);
+  // Validate the save operation
+  if (!updatedProject || !Array.isArray(updatedProject.activities)) {
+    res.status(500);
+    throw new Error('Error saving project with new activity');
+  }
+
+  // Return success response
+  res.status(201).json({
+    message: 'Activity added successfully',
+    project: updatedProject
+  });
+});
+
+// @desc    Add employee to project
+// @route   POST /api/projects/:id/employees
+// @access  Private
+const addEmployeeToProject = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const { name, role, wagePerDay, startDate, endDate } = req.body;
+
+  // Validate project ID
+  validateObjectId(projectId, 'project ID');
+
+  // Find the project
+  const project = await Project.findById(projectId);
+  if (!project) {
+    res.status(404);
+    throw new Error('Project not found');
+  }
+
+  // Validate required fields
+  if (!name || !role || !wagePerDay || !startDate) {
+    res.status(400);
+    throw new Error('Name, Role, Wage per Day, and Start Date are required for an employee');
+  }
+
+  // Validate wage is a positive number
+  const wage = parseFloat(wagePerDay);
+  if (isNaN(wage) || wage < 0) {
+    res.status(400);
+    throw new Error('Wage per Day must be a positive number');
+  }
+
+  // Validate date formats
+  if (isNaN(new Date(startDate).getTime()) || (endDate && isNaN(new Date(endDate).getTime()))) {
+    res.status(400);
+    throw new Error('Invalid date format for Start Date or End Date');
+  }
+
+  // Create new employee object
+  const newEmployee = {
+    name: name.trim(),
+    role: role.trim(),
+    wagePerDay: wage,
+    startDate: new Date(startDate),
+    endDate: endDate ? new Date(endDate) : undefined,
+    assignedAt: new Date()
+  };
+
+  // Add employee to project
+  project.employees.push(newEmployee);
+  
+  // Save the project
+  const updatedProject = await project.save();
+
+  // Validate the save operation
+  if (!updatedProject || !Array.isArray(updatedProject.employees)) {
+    res.status(500);
+    throw new Error('Error saving project with new employee');
+  }
+
+  // Return success response
+  res.status(201).json({
+    message: 'Employee added successfully',
+    project: updatedProject
+  });
 });
 
 // ... (keep getProjects, getProjectById, updateProject, addEmployeeToProject, removeEmployeeFromProject, updateActivity functions as they are) ...

@@ -1,77 +1,61 @@
+// backend/src/models/project.model.js
 import mongoose from 'mongoose';
 
-const projectSchema = new mongoose.Schema({
-  clientName: { type: String, required: true, trim: true },
-  location: { type: String, required: true, trim: true },
-  description: { type: String, trim: true },
-  startDate: { type: Date, required: true },
-  targetDeadline: { type: Date, required: true }, // This is the overall project deadline
-  progress: { type: Number, default: 0, min: 0, max: 100 },
-
-  // Project team members
-  employees: [{
+const EmployeeSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
     role: { type: String, required: true, trim: true },
     wagePerDay: { type: Number, required: true, min: 0 },
     startDate: { type: Date, required: true },
-    endDate: { type: Date }, // Optional
+    dueDate: { type: Date },
     assignedAt: { type: Date, default: Date.now }
-  }],
+});
 
-  // Project activities/tasks
-  activities: [{
-    name: { type: String, required: true, trim: true }, 
+const ActivitySchema = new mongoose.Schema({
+    name: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     startDate: { type: Date, required: true },
     dueDate: { type: Date, required: true },
-    status: {
-      type: String,
-      enum: ['pending', 'in-progress', 'completed'],
-      default: 'pending'
-    },
-    assignedTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
+    status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
     completedAt: { type: Date },
     createdAt: { type: Date, default: Date.now }
-  }],
-
-  // Important documents regarding the construction project
-  documents: [{
-    fileName: { type: String, required: true },
-    filePath: { type: String, required: true },
-    fileType: { type: String, required: true },
-    uploadedAt: { type: Date, default: Date.now }
-  }],
-
-  // Project status
-  status: {
-    type: String,
-    enum: ['planning', 'in-progress', 'on-hold', 'completed', 'cancelled'],
-    default: 'planning'
-  },
-
-  // Budget information
-  budget: {
-    estimated: { type: Number },
-    spent: { type: Number, default: 0 },
-    currency: { type: String, default: 'USD' }
-  },
-
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  }
-}, {
-  timestamps: true
 });
 
-// Remove any indexes that were specifically for 'employees._id' if it was a User ref.
-// If you had: projectSchema.index({ 'employees._id': 1 }); // REMOVE THIS
-// New index for employee name, if needed for search:
-// projectSchema.index({ 'employees.name': 1 });
+const DocumentSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    url: { type: String, required: true },
+    uploadedAt: { type: Date, default: Date.now }
+});
 
-const Project = mongoose.model('Project', projectSchema);
-export default Project;
+const ProjectSchema = new mongoose.Schema({
+    // Removed 'name' as a required field here if 'clientName' is the primary identifier for the project's title.
+    // If 'name' is truly a separate required field (e.g., internal project code),
+    // you'll need to add it to your frontend form.
+    // For now, assuming 'clientName' serves the purpose of the project's main identifier/name.
+    // name: { type: String, required: true, trim: true }, // <--- This line is likely the problem causing 'name' required error
+
+    clientName: { type: String, required: true, trim: true }, // This will be the project's name
+    description: { type: String, trim: true },
+    startDate: { type: Date, required: true },
+    targetDeadline: { type: Date, required: true }, // Changed from 'endDate' to 'targetDeadline' to match your form
+    status: { type: String, enum: ['pending', 'in-progress', 'completed', 'cancelled'], default: 'pending' },
+    budget: { type: Number, default: 0 },
+    expenses: { type: Number, default: 0 },
+    imageUrl: { type: String },
+    progress: { type: Number, default: 0 },
+    employees: [EmployeeSchema],
+    activities: [ActivitySchema],
+    documents: [DocumentSchema]
+}, { timestamps: true });
+
+// Pre-save hook to calculate progress
+ProjectSchema.pre('save', function(next) {
+    if (this.activities && this.activities.length > 0) {
+        const completedCount = this.activities.filter(activity => activity.status === 'completed').length;
+        this.progress = Math.round((completedCount / this.activities.length) * 100);
+    } else {
+        this.progress = 0;
+    }
+    next();
+});
+
+export default mongoose.model('Project', ProjectSchema);

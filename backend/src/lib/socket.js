@@ -1,9 +1,10 @@
+// backend/src/lib/socket.js (CLEANED UP)
 import { Server } from "socket.io";
 import http from "http";
 import express from "express";
 
-const app = express();
-const server = http.createServer(app);
+const app = express(); // Initialize app here
+const server = http.createServer(app); // Create server with this app
 
 const io = new Server(server, {
   cors: {
@@ -24,7 +25,6 @@ io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
   if (userId) userSocketMap[userId] = socket.id;
 
-  // io.emit() is used to send events to all the connected clients
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
   socket.on("disconnect", () => {
@@ -34,4 +34,4 @@ io.on("connection", (socket) => {
   });
 });
 
-export { io, app, server };
+export { io, app, server }; // Export app, io, and server
