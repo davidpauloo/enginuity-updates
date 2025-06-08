@@ -13,7 +13,8 @@ const __dirname = path.dirname(__filename);
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true // Use HTTPS URLs
 });
 
 // --- Storage and Multer instance for General Documents (and default export) ---
@@ -22,11 +23,13 @@ const documentStorage = new CloudinaryStorage({
   params: {
     folder: 'project_documents', // Your existing folder for general documents
     allowed_formats: ['jpeg', 'jpg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
-    resource_type: 'auto' // Important for non-image files
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `${file.fieldname}-doc-${uniqueSuffix}`); // Added '-doc-' for clarity
+    resource_type: 'raw', // Changed from 'auto' to 'raw' for documents
+    access_mode: 'public', // Make files publicly accessible
+    type: 'upload', // Explicitly set upload type
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      return `${file.fieldname}-doc-${uniqueSuffix}`; // Added '-doc-' for clarity
+    }
   }
 });
 
@@ -56,14 +59,16 @@ const coverPhotoStorage = new CloudinaryStorage({
   params: {
     folder: 'project_covers', // NEW DEDICATED FOLDER for cover photos
     allowed_formats: ['jpeg', 'jpg', 'png', 'webp'], // Typically only image formats for covers
-    resource_type: 'image' // Ensure it's treated as an image
-  },
-  filename: (req, file, cb) => {
-    // A more predictable name for covers using project ID if available
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    // Use req.params.projectId if available, otherwise 'new' (for new project creation, if you add that route later)
-    const projectIdPart = req.params.projectId || 'new';
-    cb(null, `cover-${projectIdPart}-${uniqueSuffix}`);
+    resource_type: 'image', // Ensure it's treated as an image
+    access_mode: 'public', // Make cover photos publicly accessible
+    type: 'upload', // Explicitly set upload type
+    public_id: (req, file) => {
+      // A more predictable name for covers using project ID if available
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      // Use req.params.projectId if available, otherwise 'new' (for new project creation, if you add that route later)
+      const projectIdPart = req.params.projectId || 'new';
+      return `cover-${projectIdPart}-${uniqueSuffix}`;
+    }
   }
 });
 

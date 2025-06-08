@@ -12,6 +12,10 @@ const formatDate = (dateString) => {
     return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 };
 
+const getBackendUrl = () => {
+    return import.meta.env.MODE === "development" ? "http://localhost:5001/api" : "/api";
+};
+
 const ProjectDetailsPage = () => {
     const { projectId } = useParams();
     const navigate = useNavigate();
@@ -47,6 +51,9 @@ const ProjectDetailsPage = () => {
     const [uploadCoverError, setUploadCoverError] = useState(null);
     const [coverPhotoPreview, setCoverPhotoPreview] = useState(null);
     const [coverImageUrl, setCoverImageUrl] = useState(null);
+    const [isImageLoading, setIsImageLoading] = useState(true);
+    const [isToggleActivityModalOpen, setIsToggleActivityModalOpen] = useState(false);
+    const [activityToToggle, setActivityToToggle] = useState(null);
 
     const fetchProjectDetails = async () => {
         setLoading(true);
@@ -205,39 +212,49 @@ const ProjectDetailsPage = () => {
     };
 
     const handleToggleActivity = async (activityId) => {
-        try {
-            const activityToUpdate = activities.find(a => (a.id || a._id) === activityId);
-            if (!activityToUpdate) return;
+        const activityToUpdate = activities.find(a => (a.id || a._id) === activityId);
+        if (!activityToUpdate) return;
+        
+        setActivityToToggle(activityToUpdate);
+        setIsToggleActivityModalOpen(true);
+    };
 
-            const newStatus = activityToUpdate.status === 'completed' ? 'pending' : 'completed';
+    const confirmToggleActivity = async () => {
+        if (!activityToToggle) return;
+
+        try {
+            const newStatus = activityToToggle.status === 'completed' ? 'pending' : 'completed';
             const updates = { status: newStatus };
 
             // Optimistic update for immediate UI feedback
             const updatedActivitiesOptimistic = activities.map(activity =>
-                (activity.id || activity._id) === activityId
+                (activity.id || activity._id) === (activityToToggle.id || activityToToggle._id)
                     ? { ...activity, status: newStatus, completedAt: newStatus === 'completed' ? new Date().toISOString() : undefined }
                     : activity
             );
             setActivities(updatedActivitiesOptimistic);
 
             // Make API call to update activity status
-            const response = await axiosInstance.patch(`/projects/${projectId}/activities/${activityId}`, updates);
+            const response = await axiosInstance.patch(
+                `/projects/${projectId}/activities/${activityToToggle.id || activityToToggle._id}`,
+                updates
+            );
 
-            // The backend's updateActivity route *should* return the entire updated project object.
-            if (response.data && response.data.activities) { // Assuming response.data is the updated project
-                setProject(response.data); // Update project state from backend response
-                setActivities(response.data.activities); // Update activities from the project object
+            if (response.data && response.data.activities) {
+                setProject(response.data);
+                setActivities(response.data.activities);
             } else {
-                // Fallback: Re-fetch project details if the response structure is not as expected
                 fetchProjectDetails();
             }
 
-            toast.success("Activity status and project progress updated successfully!");
+            toast.success(`Activity marked as ${newStatus}!`);
         } catch (error) {
             console.error('Error updating activity:', error.response?.data || error.message);
             toast.error(error.response?.data?.message || error.message || 'Failed to update activity status');
-            // If API call fails, revert to actual backend state
             fetchProjectDetails();
+        } finally {
+            setIsToggleActivityModalOpen(false);
+            setActivityToToggle(null);
         }
     };
 
@@ -420,6 +437,10 @@ const ProjectDetailsPage = () => {
         }
     };
 
+    const handleImageLoad = () => {
+        setIsImageLoading(false);
+    };
+
     const handleUploadCoverPhoto = async (file) => {
         if (!file) {
             toast.error('Please select an image file to upload as cover photo.');
@@ -428,6 +449,7 @@ const ProjectDetailsPage = () => {
 
         setUploadingCover(true);
         setUploadCoverError(null);
+        setIsImageLoading(true); // Set loading state when starting upload
 
         const formData = new FormData();
         formData.append('coverPhoto', file);
@@ -439,8 +461,6 @@ const ProjectDetailsPage = () => {
                 },
             });
 
-            console.log('Upload response:', res.data);
-
             // Update project with new image URL
             setProject(prev => ({
                 ...prev,
@@ -450,31 +470,20 @@ const ProjectDetailsPage = () => {
 
             setCoverImageUrl(res.data.imageUrl || res.data);
 
-            // Clean up preview
+            // Clean up
             if (coverPhotoPreview) {
                 URL.revokeObjectURL(coverPhotoPreview);
                 setCoverPhotoPreview(null);
             }
-
-            // Clean up form
             setSelectedCoverFile(null);
-            const fileInput = document.getElementById('coverPhotoInput');
-            if (fileInput) fileInput.value = '';
-
+            
             toast.success('Cover photo updated successfully!');
 
         } catch (err) {
             console.error('Error uploading cover photo:', err);
-            
-            // Clean up preview on error
-            if (coverPhotoPreview) {
-                URL.revokeObjectURL(coverPhotoPreview);
-                setCoverPhotoPreview(null);
-            }
-            
-            const errorMessage = err.response?.data?.message || 'Failed to upload cover photo.';
-            setUploadCoverError(errorMessage);
-            toast.error(errorMessage);
+            setUploadCoverError(err.response?.data?.message || 'Failed to upload cover photo.');
+            toast.error(err.response?.data?.message || 'Failed to upload cover photo.');
+            setIsImageLoading(false); // Reset loading state on error
         } finally {
             setUploadingCover(false);
         }
@@ -518,6 +527,7 @@ const ProjectDetailsPage = () => {
 
     // Banner Section Component
     const BannerSection = () => {
+        const navigate = useNavigate();
         const getImageUrl = () => {
             if (coverPhotoPreview) return coverPhotoPreview;
             if (project?.imageUrl) return `${project.imageUrl}?t=${Date.now()}`;
@@ -547,30 +557,30 @@ const ProjectDetailsPage = () => {
                         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/30 to-black/70"></div>
                     </div>
 
-                    {/* Back Button */}
-                    <div className="absolute top-6 left-6 z-20">
-                        <button
-                            onClick={() => navigate(-1)}
-                            className="btn btn-sm btn-circle glass hover:bg-base-100/20"
-                        >
-                            <ChevronLeft size={24} className="text-white" />
-                        </button>
-                    </div>
+                        {/* Back Button */}
+                        <div className="absolute top-6 left-6 z-20">
+                            <button
+                                onClick={() => navigate(-1)}
+                                className="btn btn-sm btn-circle glass hover:bg-base-100/20"
+                            >
+                                <ChevronLeft size={24} className="text-white" />
+                            </button>
+                        </div>
 
-                    {/* Upload Button */}
-                    <div className="absolute top-6 right-6 z-20">
-                        <div className="flex flex-col gap-2">
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="file"
-                                    id="coverPhotoInput"
-                                    accept="image/*"
-                                    onChange={handleCoverFileChange}
-                                    className="hidden"
-                                />
-                                <label
-                                    htmlFor="coverPhotoInput"
-                                    className={`btn btn-sm glass hover:bg-base-100/20 text-white border-white/20 ${
+                        {/* Upload Button */}
+                        <div className="absolute top-6 right-6 z-20">
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="file"
+                                        id="coverPhotoInput"
+                                        accept="image/*"
+                                        onChange={handleCoverFileChange}
+                                        className="hidden"
+                                    />
+                                    <label
+                                        htmlFor="coverPhotoInput"
+                                        className={`btn btn-sm glass hover:bg-base-100/20 text-white border-white/20 ${
                                         uploadingCover ? 'btn-disabled' : ''
                                     }`}
                                 >
@@ -619,7 +629,7 @@ const ProjectDetailsPage = () => {
                         <div className="text-white">
                             <h1 className="text-4xl md:text-5xl font-bold mb-3">{projectName}</h1>
                             <p className="text-xl text-white/90">
-                                {project?.description || 'No description available'}
+                                {project?.location || 'No location available'}
                             </p>
                         </div>
                     </div>
@@ -641,7 +651,7 @@ const ProjectDetailsPage = () => {
         employee.role.toLowerCase().includes(employeeSearch.toLowerCase())
     );
 
-    // Use actual project.progress from backend if available, otherwise default to 0
+    
     const projectProgress = project?.progress !== undefined ? project.progress : calculateProgress(activities); // Use calculated progress if backend doesn't provide it
 
     return (
@@ -1094,7 +1104,7 @@ const ProjectDetailsPage = () => {
                                                     </div>
                                                     <div className="flex gap-2">
                                                         <a
-                                                            href={doc.url}
+                                                            href={`${getBackendUrl()}/projects/${projectId}/documents/${doc._id}/view`}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
                                                             className="btn btn-ghost btn-xs tooltip tooltip-left"
@@ -1103,8 +1113,7 @@ const ProjectDetailsPage = () => {
                                                             <Eye size={16} />
                                                         </a>
                                                         <a
-                                                            href={doc.url}
-                                                            download
+                                                            href={`${getBackendUrl()}/projects/${projectId}/documents/${doc._id}/download`}
                                                             className="btn btn-ghost btn-xs tooltip tooltip-left"
                                                             data-tip="Download"
                                                         >
@@ -1154,6 +1163,46 @@ const ProjectDetailsPage = () => {
                             )}
                         </div>
                     </div>
+
+                    {/* Activity Toggle Confirmation Modal */}
+                    {isToggleActivityModalOpen && activityToToggle && (
+                        <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                            <div className="modal-box">
+                                <h3 className="font-bold text-lg text-base-content mb-4">
+                                    {activityToToggle.status === 'completed' 
+                                        ? 'Mark Activity as Pending' 
+                                        : 'Mark Activity as Completed'}
+                                </h3>
+                                <p className="py-4">
+                                    Are you sure you want to mark <strong>{activityToToggle.name}</strong> as{' '}
+                                    {activityToToggle.status === 'completed' ? 'pending' : 'completed'}?
+                                </p>
+                                <div className="modal-action">
+                                    <button 
+                                        className="btn btn-ghost" 
+                                        onClick={() => {
+                                            setIsToggleActivityModalOpen(false);
+                                            setActivityToToggle(null);
+                                        }}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        className={`btn ${activityToToggle.status === 'completed' ? 'btn-warning' : 'btn-success'}`}
+                                        onClick={confirmToggleActivity}
+                                    >
+                                        {activityToToggle.status === 'completed' ? 'Mark as Pending' : 'Mark as Completed'}
+                                    </button>
+                                </div>
+                            </div>
+                            <form method="dialog" className="modal-backdrop">
+                                <button onClick={() => {
+                                    setIsToggleActivityModalOpen(false);
+                                    setActivityToToggle(null);
+                                }}>close</button>
+                            </form>
+                        </dialog>
+                    )}
                 </>
             )}
         </div>

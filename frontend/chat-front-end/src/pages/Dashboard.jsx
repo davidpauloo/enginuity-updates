@@ -8,6 +8,7 @@ import {
   // Bell          // Likely handled by global Navbar
   // Import any other icons you might use directly in this component
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 // Placeholder for a simple calendar component (you'd replace this with a real one)
 const MiniCalendar = () => {
@@ -63,61 +64,125 @@ const DashboardPage = () => {
   const [isLoadingStats, setIsLoadingStats] = useState(true); // For loading stats
   const [statsError, setStatsError] = useState(null); // For errors fetching stats
 
-  // Fetch projects and calculate stats when the component mounts
+  // New state for deadlines, activities, and ongoing projects
+  const [deadlines, setDeadlines] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [ongoingProjects, setOngoingProjects] = useState([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+
+  // Fetch all project data
   useEffect(() => {
-    const fetchProjectStats = async () => {
+    const fetchAllData = async () => {
       setIsLoadingStats(true);
+      setIsLoadingData(true);
       setStatsError(null);
+      
       try {
-        // Assuming your backend GET /api/projects returns all projects
         const response = await axiosInstance.get('/projects');
         const allProjects = response.data;
 
         if (Array.isArray(allProjects)) {
+          // Set project counts
           setTotalProjectsCount(allProjects.length);
 
           const today = new Date();
-          today.setHours(0, 0, 0, 0); // Normalize today to the start of the day for date comparisons
+          today.setHours(0, 0, 0, 0);
 
           let activeCount = 0;
           let upcomingCount = 0;
+          const upcomingDeadlines = [];
+          const recentActivities = [];
+          const currentProjects = [];
 
           allProjects.forEach(project => {
             const startDate = new Date(project.startDate);
             const deadlineDate = new Date(project.targetDeadline);
-            startDate.setHours(0,0,0,0); // Normalize project dates
+            startDate.setHours(0,0,0,0);
             deadlineDate.setHours(0,0,0,0);
 
-            // Definition of "Active": Start date is today or in the past, AND deadline is today or in the future
-            // You might have a 'status' field in your project model which is more reliable
+            // Count active and upcoming projects
             if (startDate <= today && deadlineDate >= today) {
               activeCount++;
-            }
-            // Definition of "Upcoming": Start date is in the future
-            else if (startDate > today) {
+              currentProjects.push(project);
+            } else if (startDate > today) {
               upcomingCount++;
+            }
+
+            // Collect upcoming deadlines from activities
+            if (project.activities && Array.isArray(project.activities)) {
+              project.activities.forEach(activity => {
+                if (activity.status !== 'completed') {
+                  const activityDeadline = new Date(activity.dueDate);
+                  if (activityDeadline >= today) {
+                    upcomingDeadlines.push({
+                      date: activityDeadline,
+                      task: activity.name,
+                      projectName: project.clientName,
+                      projectId: project._id
+                    });
+                  }
+                }
+              });
+            }
+
+            // Collect recent activities (completed activities in the last 30 days)
+            if (project.activities && Array.isArray(project.activities)) {
+              const thirtyDaysAgo = new Date();
+              thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+              
+              project.activities.forEach(activity => {
+                if (activity.status === 'completed' && activity.completedAt) {
+                  const completedDate = new Date(activity.completedAt);
+                  if (completedDate >= thirtyDaysAgo) {
+                    recentActivities.push({
+                      date: completedDate,
+                      task: activity.name,
+                      projectName: project.clientName,
+                      projectId: project._id
+                    });
+                  }
+                }
+              });
             }
           });
 
+          // Sort deadlines by date
+          upcomingDeadlines.sort((a, b) => a.date - b.date);
+          // Sort activities by date (most recent first)
+          recentActivities.sort((a, b) => b.date - a.date);
+
           setActiveProjectsCount(activeCount);
           setUpcomingProjectsCount(upcomingCount);
+          setDeadlines(upcomingDeadlines.slice(0, 5)); // Show only 5 upcoming deadlines
+          setActivities(recentActivities.slice(0, 5)); // Show only 5 recent activities
+          setOngoingProjects(currentProjects);
+
         } else {
           console.error("Fetched projects is not an array:", allProjects);
           setStatsError("Unexpected data format for projects.");
         }
 
       } catch (err) {
-        console.error("Error fetching project stats:", err);
-        const errorMessage = err.response?.data?.message || err.message || "Failed to load project stats.";
+        console.error("Error fetching project data:", err);
+        const errorMessage = err.response?.data?.message || err.message || "Failed to load project data.";
         setStatsError(errorMessage);
         toast.error(errorMessage);
       } finally {
         setIsLoadingStats(false);
+        setIsLoadingData(false);
       }
     };
 
-    fetchProjectStats();
-  }, []); // Empty dependency array means run only once on mount
+    fetchAllData();
+  }, []);
+
+  // Format date helper function
+  const formatDate = (date) => {
+    return new Date(date).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric'
+    });
+  };
 
   // Dynamic stats array based on fetched data
   const stats = [
@@ -125,19 +190,6 @@ const DashboardPage = () => {
     { title: 'Upcoming Projects', value: upcomingProjectsCount },
     { title: 'Total Projects', value: totalProjectsCount, buttonText: 'See Completed Projects', path: '/projects?status=completed' },
   ];
-
-  // Placeholder data for other sections (can also be fetched if needed)
-  const deadlines = [
-    { date: 'May 10', task: 'Finalize Blueprints' },
-    { date: 'May 15', task: 'Client Approval Meeting' },
-    { date: 'May 25', task: 'Begin Phase 1 Construction' },
-  ];
-  const activities = [
-    { date: 'May 5', task: 'Site Inspection' },
-    { date: 'May 3', task: 'Material Order Placed' },
-  ];
-  const ongoingProjects = [];
-
 
   return (
     <>
@@ -192,39 +244,58 @@ const DashboardPage = () => {
           <div className="card bg-base-100 shadow-xl">
             <div className="card-body">
               <h2 className="card-title text-base-content">Upcoming Deadlines</h2>
-              {deadlines.length > 0 ? (
+              {isLoadingData ? (
+                <div className="flex justify-center items-center p-4">
+                  <span className="loading loading-spinner loading-md"></span>
+                </div>
+              ) : deadlines.length > 0 ? (
                 <ul className="mt-2 space-y-2">
                   {deadlines.map((deadline, index) => (
                     <li key={index} className="text-sm text-base-content/80 border-l-4 border-secondary pl-3 py-1">
-                      <span className="font-semibold text-secondary-focus">{deadline.date}</span> - {deadline.task}
+                      <Link to={`/projects/${deadline.projectId}`} className="hover:text-primary">
+                        <span className="font-semibold text-secondary-focus">{formatDate(deadline.date)}</span> - {deadline.task}
+                        <span className="text-xs text-base-content/60 block">Project: {deadline.projectName}</span>
+                      </Link>
                     </li>
                   ))}
                 </ul>
               ) : (
-                 <p className="text-sm text-base-content/70 mt-2 italic">No upcoming deadlines.</p>
+                <p className="text-sm text-base-content/70 mt-2 italic">No upcoming deadlines.</p>
               )}
               <div className="card-actions justify-start mt-4">
-                <button className="btn btn-sm btn-ghost text-primary hover:bg-primary/10">View All Deadlines</button>
+                <Link to="/projects" className="btn btn-sm btn-ghost text-primary hover:bg-primary/10">
+                  View All Projects
+                </Link>
               </div>
             </div>
           </div>
+
           {/* Activities Card */}
           <div className="card bg-base-100 shadow-xl">
             <div className="card-body">
               <h2 className="card-title text-base-content">Recent Activities</h2>
-              {activities.length > 0 ? (
+              {isLoadingData ? (
+                <div className="flex justify-center items-center p-4">
+                  <span className="loading loading-spinner loading-md"></span>
+                </div>
+              ) : activities.length > 0 ? (
                 <ul className="mt-2 space-y-2">
-                 {activities.map((activity, index) => (
-                  <li key={index} className="text-sm text-base-content/80 border-l-4 border-accent pl-3 py-1">
-                    <span className="font-semibold text-accent-focus">{activity.date}</span> - {activity.task}
-                  </li>
-                ))}
+                  {activities.map((activity, index) => (
+                    <li key={index} className="text-sm text-base-content/80 border-l-4 border-accent pl-3 py-1">
+                      <Link to={`/projects/${activity.projectId}`} className="hover:text-primary">
+                        <span className="font-semibold text-accent-focus">{formatDate(activity.date)}</span> - {activity.task}
+                        <span className="text-xs text-base-content/60 block">Project: {activity.projectName}</span>
+                      </Link>
+                    </li>
+                  ))}
                 </ul>
               ) : (
-                 <p className="text-sm text-base-content/70 mt-2 italic">No recent activities.</p>
+                <p className="text-sm text-base-content/70 mt-2 italic">No recent activities.</p>
               )}
-               <div className="card-actions justify-start mt-4">
-                <button className="btn btn-sm btn-ghost text-primary hover:bg-primary/10">View All Activities</button>
+              <div className="card-actions justify-start mt-4">
+                <Link to="/projects" className="btn btn-sm btn-ghost text-primary hover:bg-primary/10">
+                  View All Projects
+                </Link>
               </div>
             </div>
           </div>
@@ -232,20 +303,40 @@ const DashboardPage = () => {
 
         {/* Right Column (Calendar, Ongoing Projects) */}
         <div className="space-y-6">
-           <div className="card bg-base-100 shadow-xl p-0">
-              <MiniCalendar />
-           </div>
+          <div className="card bg-base-100 shadow-xl p-0">
+            <MiniCalendar />
+          </div>
           <div className="card bg-base-100 shadow-xl">
             <div className="card-body">
-              <h2 className="card-title text-base-content">Month</h2>
-              <p className="text-base-content/80 font-semibold">Ongoing Projects</p>
-              {ongoingProjects.length > 0 ? (
-                 <ul className="list-disc list-inside mt-2 space-y-1 text-sm text-base-content/80">
-                    {/* Map ongoing projects here */}
-                 </ul>
+              <h2 className="card-title text-base-content">Ongoing Projects</h2>
+              {isLoadingData ? (
+                <div className="flex justify-center items-center p-4">
+                  <span className="loading loading-spinner loading-md"></span>
+                </div>
+              ) : ongoingProjects.length > 0 ? (
+                <ul className="mt-2 space-y-2">
+                  {ongoingProjects.map((project) => (
+                    <li key={project._id} className="text-sm">
+                      <Link to={`/projects/${project._id}`} className="hover:text-primary">
+                        <div className="font-medium">{project.clientName}</div>
+                        <div className="text-xs text-base-content/60">
+                          {project.location}
+                        </div>
+                        <div className="text-xs text-base-content/60 mt-1">
+                          Deadline: {formatDate(project.targetDeadline)}
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <p className="text-sm text-base-content/60 mt-2 italic">No ongoing projects this month.</p>
+                <p className="text-sm text-base-content/70 mt-2 italic">No ongoing projects.</p>
               )}
+              <div className="card-actions justify-start mt-4">
+                <Link to="/projects" className="btn btn-sm btn-ghost text-primary hover:bg-primary/10">
+                  View All Projects
+                </Link>
+              </div>
             </div>
           </div>
         </div>

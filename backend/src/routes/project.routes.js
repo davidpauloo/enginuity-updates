@@ -420,5 +420,83 @@ router.patch('/:projectId/imageUrl', uploadCoverPhoto.single('coverPhoto'), asyn
     }
 });
 
+// Route to view a document (inline)
+router.get('/:projectId/documents/:documentId/view', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.documentId)) {
+            return res.status(400).json({ message: 'Invalid ID format for project or document.' });
+        }
+
+        const project = await Project.findById(req.params.projectId);
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found.' });
+        }
+
+        const document = project.documents.find(doc => doc._id.toString() === req.params.documentId);
+        if (!document) {
+            return res.status(404).json({ message: 'Document not found in this project.' });
+        }
+
+        // For viewing, we'll use Cloudinary's inline transformation
+        // This will force the browser to display the file instead of downloading it
+        const cloudinaryUrl = document.url.replace('/upload/', '/upload/fl_force_strip,fl_attachment:inline/');
+        
+        // Set appropriate headers for viewing
+        res.setHeader('Content-Type', getContentType(document.name));
+        res.setHeader('Content-Disposition', 'inline');
+        res.redirect(cloudinaryUrl);
+    } catch (err) {
+        console.error('Error viewing document:', err);
+        res.status(500).json({ message: 'Server error viewing document', error: err.message });
+    }
+});
+
+// Route to download a document
+router.get('/:projectId/documents/:documentId/download', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.documentId)) {
+            return res.status(400).json({ message: 'Invalid ID format for project or document.' });
+        }
+
+        const project = await Project.findById(req.params.projectId);
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found.' });
+        }
+
+        const document = project.documents.find(doc => doc._id.toString() === req.params.documentId);
+        if (!document) {
+            return res.status(404).json({ message: 'Document not found in this project.' });
+        }
+
+        // For downloading, we'll use Cloudinary's attachment transformation
+        const cloudinaryUrl = document.url.replace('/upload/', '/upload/fl_force_strip,fl_attachment:attachment/');
+        
+        // Set appropriate headers for downloading
+        res.setHeader('Content-Type', getContentType(document.name));
+        res.setHeader('Content-Disposition', `attachment; filename="${document.name}"`);
+        res.redirect(cloudinaryUrl);
+    } catch (err) {
+        console.error('Error downloading document:', err);
+        res.status(500).json({ message: 'Server error downloading document', error: err.message });
+    }
+});
+
+// Helper function to determine content type based on file extension
+function getContentType(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const contentTypes = {
+        'pdf': 'application/pdf',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'doc': 'application/msword',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls': 'application/vnd.ms-excel',
+        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'txt': 'text/plain'
+    };
+    return contentTypes[ext] || 'application/octet-stream';
+}
 
 export default router;

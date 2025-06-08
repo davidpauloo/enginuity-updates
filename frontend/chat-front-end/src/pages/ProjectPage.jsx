@@ -97,27 +97,41 @@ const ProjectPage = () => {
     }
 
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {projectsToRender.map((project) => (
-          <Link
-            to={`/projects/${project._id}`}
-            key={project._id}
-            className="card bg-base-100 shadow-md hover:shadow-lg transition-shadow duration-200 ease-in-out cursor-pointer block"
-          >
-            <div className="card-body">
-              <h3 className="card-title text-lg truncate">{project.clientName}</h3>
-              <p className="text-sm"><span className="font-semibold">Location:</span> <span className="text-base-content/80 truncate block">{project.location}</span></p>
-              <p className="text-xs text-base-content/70 mt-1 break-words h-10 overflow-hidden"> {/* Fixed height for description */}
-                {project.description || 'No description provided.'}
-              </p>
-              <div className="divider my-2"></div>
-              <div className="mt-1 text-xs grid grid-cols-2 gap-x-2">
-                <p><span className="font-semibold block">Start:</span> {project.startDate ? new Date(project.startDate).toLocaleDateString() : 'N/A'}</p>
-                <p><span className="font-semibold block">Deadline:</span> {project.targetDeadline ? new Date(project.targetDeadline).toLocaleDateString() : 'N/A'}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {projectsToRender.map((project) => {
+          const coverUrl = project.imageUrl || 'https://placehold.co/600x300/222/fff?text=No+Image';
+          const startDate = project.startDate ? new Date(project.startDate).toLocaleDateString() : 'N/A';
+          const deadline = project.targetDeadline ? new Date(project.targetDeadline).toLocaleDateString() : 'N/A';
+          return (
+            <Link
+              to={`/projects/${project._id}`}
+              key={project._id}
+              className="block rounded-3xl overflow-hidden shadow-lg hover:shadow-xl transition-shadow duration-200"
+              style={{ minHeight: 180 }}
+            >
+              <div
+                className="relative h-40 md:h-48 w-full flex items-end"
+                style={{
+                  backgroundImage: `url(${coverUrl})`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                }}
+              >
+                {/* Overlay */}
+                <div className="absolute inset-0 bg-black/40" />
+                {/* Project Info */}
+                <div className="relative z-10 p-6">
+                  <h3 className="text-white text-2xl font-semibold drop-shadow-lg mb-1">{project.clientName}</h3>
+                  <p className="text-white/90 text-base font-medium drop-shadow mb-1">{project.location}</p>
+                  <div className="flex gap-4 text-xs text-white/80 drop-shadow">
+                    <span>Start: {startDate}</span>
+                    <span>Deadline: {deadline}</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </Link>
-        ))}
+            </Link>
+          );
+        })}
       </div>
     );
   };
