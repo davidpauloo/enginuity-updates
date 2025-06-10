@@ -46,7 +46,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 const allowedOrigins = [
   'http://localhost:5173', // Your local frontend
-  'https://enguinity-zt8g.vercel.app' // Your future live frontend URL
+  'https://enguinity-9.onrender.com' // Your future live frontend URL
 ];
 // --------------
 
