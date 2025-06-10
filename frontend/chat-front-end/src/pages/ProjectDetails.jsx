@@ -1,8 +1,17 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { FileText, Trash2, Download, Eye, X, User, CheckCircle2, Calendar, Clock, AlertCircle, Plus, DollarSign, Briefcase, ChevronLeft } from "lucide-react";
-import { axiosInstance } from "../lib/axios"; 
+import { axiosInstance } from "../lib/axios";
+
+import PayrollRunForm from "../components/PayrollRunForm"; // <-- ADD THIS
+import ConfirmationModal from "../components/ConfirmationModal";
+
+const PREDEFINED_ROLES_PROJECT = [
+    "Laborer", "Skilled Laborer", "Carpenter", "Mason", "Electrician", "Plumber",
+    "Welder", "Painter", "Heavy Equipment Operator", "Driver", "Foreman",
+    "Site Engineer", "Project Manager", "Safety Officer", "Quantity Surveyor", "Administrative Staff"
+].sort();
 
 const formatDate = (dateString) => {
     if (!dateString) return 'N/A'; // Handle null/empty date strings gracefully
@@ -12,6 +21,7 @@ const formatDate = (dateString) => {
     return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 };
 
+const formatNumberDisplay = (num) => (typeof num === 'number' ? num.toFixed(2) : '0.00'); // <-- ADD THIS
 const getBackendUrl = () => {
     return import.meta.env.MODE === "development" ? "http://localhost:5001/api" : "/api";
 };
@@ -41,7 +51,6 @@ const ProjectDetailsPage = () => {
         startDate: '',
         endDate: '' // This maps to dueDate on the backend for activities
     });
-    const [activities, setActivities] = useState([]); // This will be directly populated from project.activities
     const [error, setError] = useState(null);
     const [isDeleteEmployeeModalOpen, setIsDeleteEmployeeModalOpen] = useState(false);
     const [employeeToDelete, setEmployeeToDelete] = useState(null);
@@ -54,23 +63,46 @@ const ProjectDetailsPage = () => {
     const [isImageLoading, setIsImageLoading] = useState(true);
     const [isToggleActivityModalOpen, setIsToggleActivityModalOpen] = useState(false);
     const [activityToToggle, setActivityToToggle] = useState(null);
+    const [showProjectPayrollModal, setShowProjectPayrollModal] = useState(false);
+    const [selectedProjectEmployeeForPayroll, setSelectedProjectEmployeeForPayroll] = useState(null);
+    const [isProcessingProjectPayroll, setIsProcessingProjectPayroll] = useState(false);
+    const [payrollResultForProject, setPayrollResultForProject] = useState(null);
+    const [projectPayrollError, setProjectPayrollError] = useState(null);
+    const [payrollSearchTerm, setPayrollSearchTerm] = useState('');
+    
 
-    const fetchProjectDetails = async () => {
+    const [showConfirmModalProjectPayroll, setShowConfirmModalProjectPayroll] = useState(false);
+    const [modalActionProjectPayroll, setModalActionProjectPayroll] = useState(null);
+
+    const [payrollHistory, setPayrollHistory] = useState([]);
+    const [historyLoading, setHistoryLoading] = useState(true);
+    const [selectedPayrollRecord, setSelectedPayrollRecord] = useState(null);
+    
+
+    const fetchProjectDetails = useCallback(async () => {
         setLoading(true);
+        setHistoryLoading(true); // Manages loading state for history card
         setError(null);
         try {
-            const res = await axiosInstance.get(`/projects/${projectId}`);
-            setProject(res.data);
-            // Ensure activities are always an array, and use a consistent identifier (_id or id)
-            setActivities(res.data.activities && Array.isArray(res.data.activities) ? res.data.activities : []);
+            // This now fetches both endpoints at once
+            const [projectRes, historyRes] = await Promise.all([
+                axiosInstance.get(`/projects/${projectId}`),
+                axiosInstance.get(`/projects/${projectId}/payroll-history`)
+            ]);
+            
+            setProject(projectRes.data);
+            setPayrollHistory(historyRes.data); // Set the payroll history state
+
         } catch (err) {
-            console.error('Error fetching project details:', err.response?.data || err.message);
-            setError(err.response?.data?.message || err.message || 'Failed to load project details.');
-            toast.error(err.response?.data?.message || err.message || 'Failed to load project details.');
+            console.error('Error fetching project data:', err.response?.data || err.message);
+            const errMsg = err.response?.data?.message || 'Failed to load project details.';
+            setError(errMsg);
+            toast.error(errMsg);
         } finally {
             setLoading(false);
+            setHistoryLoading(false);
         }
-    };
+    }, [projectId]);
 
     useEffect(() => {
         if (projectId) {
@@ -84,6 +116,107 @@ const ProjectDetailsPage = () => {
             setCoverImageUrl(project.imageUrl);
         }
     }, [project]);
+
+    // --- PASTE THIS ENTIRE BLOCK for Payroll and History Logic ---
+    const fetchPayrollHistory = useCallback(async () => {
+        if (!projectId) return;
+        try {
+            const historyRes = await axiosInstance.get(`/projects/${projectId}/payroll-history`);
+            setPayrollHistory(historyRes.data);
+        } catch (err) {
+            console.error('Could not fetch payroll history', err);
+            toast.error("Could not load payroll history.");
+        }
+    }, [projectId]);
+
+    const handleProjectPayrollButtonClick = () => {
+        resetPayrollModal();
+        setShowProjectPayrollModal(true);
+    };
+    
+    const handleProjectPayrollSubmitTrigger = (payrollDataFromForm) => {
+        const modalContent = {
+            title: "Confirm Payroll Run",
+            message: `Process payroll for ${payrollDataFromForm.name} (Period: ${payrollDataFromForm.payPeriod})?`,
+            confirmText: "Process"
+        };
+        setModalActionProjectPayroll({ 
+            action: () => () => executeProjectPayrollProcessing(payrollDataFromForm),
+            content: modalContent 
+        });
+        setShowProjectPayrollModal(false);
+        setShowConfirmModalProjectPayroll(true);
+    };
+
+    const executeProjectPayrollProcessing = async (payrollDataFromForm) => {
+        setIsProcessingProjectPayroll(true);
+        setProjectPayrollError(null);
+        setPayrollResultForProject(null);
+
+        const { employeeId, name, role, dailyRate, regularDays, overtimeHours, overtimeRateFactor, payPeriod, standardWorkHoursPerDay, deductions, notes } = payrollDataFromForm;
+        
+        const ratePerDay = parseFloat(dailyRate);
+        const regDays = parseFloat(regularDays);
+        const otHours = parseFloat(overtimeHours);
+        const otFactor = parseFloat(overtimeRateFactor);
+        const workHoursPerDay = parseFloat(standardWorkHoursPerDay);
+
+        const effectiveHourlyRateForOT = workHoursPerDay > 0 ? ratePerDay / workHoursPerDay : 0;
+        const calculatedRegularPay = regDays * ratePerDay;
+        const calculatedOvertimePay = otHours * effectiveHourlyRateForOT * otFactor;
+        const calculatedGrossWage = calculatedRegularPay + calculatedOvertimePay;
+        
+        const processedDeductions = (Array.isArray(deductions) ? deductions : [])
+            .filter(d => d.description?.trim() && !isNaN(parseFloat(d.amount)) && parseFloat(d.amount) >= 0)
+            .map(d => ({ description: d.description.trim(), amount: parseFloat(d.amount) }));
+            
+        const calculatedTotalDeductions = processedDeductions.reduce((sum, d) => sum + d.amount, 0);
+        const calculatedNetPay = calculatedGrossWage - calculatedTotalDeductions;
+
+        const payloadToSave = {
+            employeeId: employeeId || name,
+            employeeName: name,
+            role, payPeriod, regularDaysWorked: regDays, overtimeHours: otHours, dailyRate: ratePerDay,
+            standardWorkHoursPerDay: workHoursPerDay, effectiveHourlyRateUsedForOT: effectiveHourlyRateForOT,
+            overtimeRateFactor: otFactor, regularPay: calculatedRegularPay, overtimePay: calculatedOvertimePay,
+            grossWage: calculatedGrossWage, deductions: processedDeductions, totalDeductions: calculatedTotalDeductions,
+            netPay: calculatedNetPay, notes: notes || '', processedDate: new Date().toISOString(), projectId: projectId 
+        };
+
+        try {
+            const response = await axiosInstance.post(`/payrolls`, payloadToSave);
+            setPayrollResultForProject(response.data);
+            toast.success(`Payroll for ${name} saved successfully!`);
+            await fetchPayrollHistory();
+            setSelectedPayrollRecord(response.data);
+        } catch (err) {
+            console.error("Error saving project payroll:", err);
+            const errMsg = err.response?.data?.message || "Failed to save payroll record.";
+            setProjectPayrollError(errMsg);
+            toast.error(errMsg);
+            setPayrollResultForProject(payloadToSave);
+        } finally {
+            setIsProcessingProjectPayroll(false);
+        }
+    };
+
+    const handleModalConfirmProjectPayroll = () => {
+        if (modalActionProjectPayroll && typeof modalActionProjectPayroll.action === 'function') {
+            modalActionProjectPayroll.action()();
+        }
+        setShowConfirmModalProjectPayroll(false);
+    };
+
+    const handleModalCloseProjectPayroll = () => {
+        setShowConfirmModalProjectPayroll(false);
+    };
+
+    const resetPayrollModal = () => {
+        setSelectedProjectEmployeeForPayroll(null);
+        setPayrollResultForProject(null);
+        setProjectPayrollError(null);
+    };
+    // --- END OF BLOCK ---
 
     const handleFileUpload = async () => {
         if (!selectedFile) {
@@ -211,84 +344,61 @@ const ProjectDetailsPage = () => {
         }
     };
 
-    const handleToggleActivity = async (activityId) => {
-        const activityToUpdate = activities.find(a => (a.id || a._id) === activityId);
-        if (!activityToUpdate) return;
+ const handleToggleActivity = (activityId) => { // No longer needs to be async
+    const activityToUpdate = project.activities.find(a => (a._id) === activityId); // <-- FIX: Use project.activities
+    if (!activityToUpdate) return;
+    
+    setActivityToToggle(activityToUpdate);
+    setIsToggleActivityModalOpen(true);
+};
+
+    // AFTER
+const confirmToggleActivity = async () => {
+    if (!activityToToggle) return;
+
+    try {
+        const newStatus = activityToToggle.status === 'completed' ? 'pending' : 'completed';
         
-        setActivityToToggle(activityToUpdate);
-        setIsToggleActivityModalOpen(true);
-    };
+        // The backend already returns the full updated project object.
+        // We just need to save it to our state.
+        const response = await axiosInstance.patch(
+            `/projects/${projectId}/activities/${activityToToggle._id}`, 
+            { status: newStatus }
+        );
 
-    const confirmToggleActivity = async () => {
-        if (!activityToToggle) return;
+        setProject(response.data); // <-- FIX: This is all we need to update the UI
+        toast.success(`Activity status updated!`);
 
-        try {
-            const newStatus = activityToToggle.status === 'completed' ? 'pending' : 'completed';
-            const updates = { status: newStatus };
-
-            // Optimistic update for immediate UI feedback
-            const updatedActivitiesOptimistic = activities.map(activity =>
-                (activity.id || activity._id) === (activityToToggle.id || activityToToggle._id)
-                    ? { ...activity, status: newStatus, completedAt: newStatus === 'completed' ? new Date().toISOString() : undefined }
-                    : activity
-            );
-            setActivities(updatedActivitiesOptimistic);
-
-            // Make API call to update activity status
-            const response = await axiosInstance.patch(
-                `/projects/${projectId}/activities/${activityToToggle.id || activityToToggle._id}`,
-                updates
-            );
-
-            if (response.data && response.data.activities) {
-                setProject(response.data);
-                setActivities(response.data.activities);
-            } else {
-                fetchProjectDetails();
-            }
-
-            toast.success(`Activity marked as ${newStatus}!`);
-        } catch (error) {
-            console.error('Error updating activity:', error.response?.data || error.message);
-            toast.error(error.response?.data?.message || error.message || 'Failed to update activity status');
-            fetchProjectDetails();
-        } finally {
-            setIsToggleActivityModalOpen(false);
-            setActivityToToggle(null);
-        }
-    };
+    } catch (error) {
+        console.error('Error updating activity:', error.response?.data || error.message);
+        toast.error(error.response?.data?.message || 'Failed to update activity status');
+        // If it fails, refresh all data from the server to be safe
+        fetchProjectDetails(); 
+    } finally {
+        setIsToggleActivityModalOpen(false);
+        setActivityToToggle(null);
+    }
+};
 
     // Modified to accept activities array to calculate progress based on specific state
-    const calculateProgress = (currentActivities) => {
-        if (!currentActivities || currentActivities.length === 0) return 0;
-        const completedCount = currentActivities.filter(activity => activity.status === 'completed').length;
-        return Math.round((completedCount / currentActivities.length) * 100);
-    };
+    // BEFORE
+// AFTER
+const calculateProgress = () => { // It no longer needs an argument
+    const currentActivities = project?.activities || [];
+    if (currentActivities.length === 0) return 0;
+    const completedCount = currentActivities.filter(activity => activity.status === 'completed').length;
+    return Math.round((completedCount / currentActivities.length) * 100);
+};
 
-    const getUpcomingDeadlines = () => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        console.log('All activities:', activities); // Debug log
-
-        return activities
-            .filter(activity => {
-                const dueDate = new Date(activity.dueDate);
-                dueDate.setHours(0, 0, 0, 0);
-                
-                console.log('Activity:', {
-                    name: activity.name,
-                    dueDate: activity.dueDate,
-                    parsedDueDate: dueDate,
-                    isValid: !isNaN(dueDate.getTime()),
-                    isFuture: dueDate >= today,
-                    status: activity.status
-                });
-
-                return dueDate >= today && activity.status !== 'completed';
-            })
-            .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-    };
+   // BEFORE
+const getUpcomingDeadlines = () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return (project?.activities || []) // This part was already correct
+        .filter(activity => new Date(activity.dueDate) >= today && activity.status !== 'completed')
+        .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
+        .slice(0, 5);
+};
 
     const handleAddEmployee = async (e) => {
         e.preventDefault();
@@ -524,6 +634,9 @@ const ProjectDetailsPage = () => {
             }
         };
     }, [coverPhotoPreview]);
+    const filteredPayrollHistory = payrollHistory.filter(record =>
+        record.employeeName.toLowerCase().includes(payrollSearchTerm.toLowerCase())
+    );
 
     // Banner Section Component
     const BannerSection = () => {
@@ -652,8 +765,8 @@ const ProjectDetailsPage = () => {
     );
 
     
-    const projectProgress = project?.progress !== undefined ? project.progress : calculateProgress(activities); // Use calculated progress if backend doesn't provide it
-
+// AFTER
+const projectProgress = calculateProgress();
     return (
         <div className="p-0 sm:p-0 md:p-0 lg:p-0 xl:p-0 2xl:p-0">
             {loading ? (
@@ -730,15 +843,12 @@ const ProjectDetailsPage = () => {
                                 <div className="card bg-base-100 shadow-md">
                                     <div className="card-body">
                                         <div className="flex justify-between items-center mb-4">
-                                            <h3 className="text-xl font-semibold text-base-content">Assigned Employees</h3>
-                                            <button
-                                                onClick={() => setIsAddingEmployee(true)}
-                                                className="btn btn-primary btn-sm"
-                                            >
-                                                <Plus size={16} className="mr-2" />
-                                                Add Employee
-                                            </button>
-                                        </div>
+    <h3 className="text-xl font-semibold text-base-content">Assigned Employees</h3>
+    <div className="flex gap-2"> {/* Buttons are grouped inside this div */}
+        <button onClick={handleProjectPayrollButtonClick} className="btn btn-secondary btn-sm"><DollarSign size={16} className="mr-1" />Project Payroll</button>
+        <button onClick={() => setIsAddingEmployee(true)} className="btn btn-primary btn-sm"><Plus size={16} className="mr-1" />Add Employee</button>
+    </div>
+</div>
                                         <div className="mb-4">
                                             <div className="join w-full">
                                                 <input
@@ -1017,46 +1127,28 @@ const ProjectDetailsPage = () => {
                                         )}
 
                                         {/* List of activities */}
-                                        {activities.length > 0 ? (
-                                            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-                                                {activities
-                                                    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
-                                                    .map((activity) => (
-                                                        <div key={activity._id || activity.id} className="flex items-start gap-4 p-4 bg-base-200 rounded-lg shadow-sm">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={activity.status === 'completed'}
-                                                                onChange={() => handleToggleActivity(activity._id || activity.id)}
-                                                                className="checkbox checkbox-lg checkbox-primary mt-1"
-                                                            />
-                                                            <div className="flex-1">
-                                                                <h4 className={`font-semibold text-lg ${activity.status === 'completed' ? 'line-through text-base-content/50' : ''}`}>
-                                                                    {activity.name}
-                                                                </h4>
-                                                                {activity.description && (
-                                                                    <p className="text-base-content/70 text-sm mt-1">
-                                                                        {activity.description}
-                                                                    </p>
-                                                                )}
-                                                                <div className="flex items-center text-sm text-base-content/60 mt-2">
-                                                                    <Calendar size={14} className="mr-2" />
-                                                                    <span>Start: {formatDate(activity.startDate)}</span>
-                                                                    <Clock size={14} className="ml-4 mr-2" />
-                                                                    <span>End: {formatDate(activity.dueDate)}</span> {/* Display dueDate */}
-                                                                </div>
-                                                                {activity.status === 'completed' && activity.completedAt && (
-                                                                    <div className="flex items-center text-sm text-success mt-1">
-                                                                        <CheckCircle2 size={14} className="mr-2" />
-                                                                        <span>Completed on: {formatDate(activity.completedAt)}</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                            </div>
-                                        ) : (
-                                            <p className="text-base-content/70 text-center py-4">No activities added yet.</p>
-                                        )}
+                                        {(project?.activities?.length || 0) > 0 ? ( // <-- FIX: Use project.activities
+    <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+        {[...project.activities] // <-- FIX: Use project.activities
+            .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
+            .map((activity) => (
+                <div key={activity._id} className="flex items-start gap-4 p-4 bg-base-200 rounded-lg shadow-sm">
+                    <input type="checkbox" checked={activity.status === 'completed'} onChange={() => handleToggleActivity(activity._id)} className="checkbox checkbox-lg checkbox-primary mt-1" />
+                    <div className="flex-1">
+                        <h4 className={`font-semibold text-lg ${activity.status === 'completed' ? 'line-through text-base-content/50' : ''}`}>{activity.name}</h4>
+                        {activity.description && (<p className="text-base-content/70 text-sm mt-1">{activity.description}</p>)}
+                        <div className="flex items-center text-sm text-base-content/60 mt-2">
+                            <Calendar size={14} className="mr-2" /><span>Start: {formatDate(activity.startDate)}</span>
+                            <Clock size={14} className="ml-4 mr-2" /><span>End: {formatDate(activity.dueDate)}</span>
+                        </div>
+                        {activity.status === 'completed' && activity.completedAt && (<div className="flex items-center text-sm text-success mt-1"><CheckCircle2 size={14} className="mr-2" /><span>Completed on: {formatDate(activity.completedAt)}</span></div>)}
+                    </div>
+                </div>
+            ))}
+    </div>
+) : (
+    <p className="text-base-content/70 text-center py-4">No activities added yet.</p>
+)}
                                     </div>
                                 </div>
                             </div>
@@ -1136,6 +1228,46 @@ const ProjectDetailsPage = () => {
                                 </div>
                             </div>
 
+                            <div className="card bg-base-100 shadow-md">
+    <div className="card-body">
+        <h3 className="text-xl font-semibold text-base-content mb-4">Payroll History</h3>
+        
+        {/* --- ADD THIS SEARCH INPUT --- */}
+        <div className="mb-4">
+            <input 
+                type="text"
+                placeholder="Search by employee name..."
+                className="input input-bordered input-sm w-full"
+                value={payrollSearchTerm}
+                onChange={(e) => setPayrollSearchTerm(e.target.value)}
+            />
+        </div>
+        {historyLoading ? (
+    <div className="flex justify-center items-center p-4"><span className="loading loading-spinner text-primary"></span></div>
+) : filteredPayrollHistory.length > 0 ? ( // <-- Use filtered array
+    <ul className="space-y-3 max-h-60 overflow-y-auto pr-2">
+        {filteredPayrollHistory.map((record) => ( // <-- Use filtered array
+            <li key={record._id} className="p-3 bg-base-200 rounded-lg text-sm hover:bg-base-300 cursor-pointer" onClick={() => setSelectedPayrollRecord(record)}>
+                <div className="flex justify-between font-medium">
+                    <span>{record.employeeName}</span>
+                    <span className="font-bold text-green-600">₱{formatNumberDisplay(record.netPay)}</span>
+                </div>
+                <div className="text-xs text-base-content/70 mt-1">
+                    <span>{formatDate(record.processedDate)}</span>
+                    <span className="mx-1">|</span>
+                    <span>{record.payPeriod}</span>
+                </div>
+            </li>
+        ))}
+    </ul>
+) : (
+    <p className="text-base-content/70 text-center py-4 italic">
+        {payrollSearchTerm ? "No records match your search." : "No payroll records yet."}
+    </p>
+)}
+    </div>
+</div>
+
                             {/* Upload Document Modal */}
                             {isUploadModalOpen && (
                                 <dialog open className="modal modal-open modal-bottom sm:modal-middle">
@@ -1203,7 +1335,239 @@ const ProjectDetailsPage = () => {
                             </form>
                         </dialog>
                     )}
+
+                    {isAddingEmployee && (
+                <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                    <div className="modal-box">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg text-base-content">Add New Employee to Project</h3>
+                            <button onClick={() => setIsAddingEmployee(false)} className="btn btn-sm btn-circle btn-ghost"><X size={20} /></button>
+                        </div>
+                        <form onSubmit={handleAddEmployee} className="space-y-4">
+                            <div className="form-control">
+                                <label className="label"><span className="label-text">Employee Name *</span></label>
+                                <input type="text" value={newEmployee.name} onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })} placeholder="Enter employee name" className="input input-bordered w-full" required />
+                            </div>
+                            <div className="form-control">
+                                <label className="label"><span className="label-text">Role *</span></label>
+                                <select name="role" value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value })} className="select select-bordered w-full" required>
+                                    <option value="">Select a role</option>
+                                    {PREDEFINED_ROLES_PROJECT.map(roleName => (<option key={roleName} value={roleName}>{roleName}</option>))}
+                                </select>
+                            </div>
+                            <div className="form-control">
+                                <label className="label"><span className="label-text">Wage per Day (₱) *</span></label>
+                                <input type="number" value={newEmployee.wagePerDay} onChange={(e) => setNewEmployee({ ...newEmployee, wagePerDay: e.target.value })} placeholder="Enter daily wage" className="input input-bordered w-full" min="0" step="0.01" required />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="form-control">
+                                    <label className="label"><span className="label-text">Project Start Date *</span></label>
+                                    <input type="date" value={newEmployee.startDate} onChange={(e) => setNewEmployee({ ...newEmployee, startDate: e.target.value })} className="input input-bordered w-full" required />
+                                </div>
+                                <div className="form-control">
+                                    <label className="label"><span className="label-text">Project End Date (Optional)</span></label>
+                                    <input type="date" value={newEmployee.endDate} onChange={(e) => setNewEmployee({ ...newEmployee, endDate: e.target.value })} className="input input-bordered w-full" />
+                                </div>
+                            </div>
+                            <div className="modal-action">
+                                <button type="button" onClick={() => setIsAddingEmployee(false)} className="btn btn-ghost">Cancel</button>
+                                <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? "Adding..." : "Add Employee"}</button>
+                            </div>
+                        </form>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button onClick={() => setIsAddingEmployee(false)}>close</button></form>
+                </dialog>
+            )}
+
+                    {showProjectPayrollModal && (
+                <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                    <div className="modal-box w-11/12 max-w-2xl">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg">Run Payroll for Project Employee</h3>
+                            <button onClick={() => { setShowProjectPayrollModal(false); resetPayrollModal(); }} className="btn btn-sm btn-circle btn-ghost"><X size={20} /></button>
+                        </div>
+                        {projectPayrollError && <div className="alert alert-error shadow-lg mb-4"><div><AlertCircle size={20} /><span>{projectPayrollError}</span></div></div>}
+                        
+                        {payrollResultForProject ? (
+                            <div className="mt-6 p-6 bg-green-50 border border-green-200 rounded-xl shadow-lg">
+                                <h3 className="text-xl font-semibold text-green-800 mb-3">Payroll Processed for: {payrollResultForProject.employeeName}</h3>
+                                <div className="space-y-1 text-sm text-gray-700">
+                                    <p><strong>Pay Period:</strong> {payrollResultForProject.payPeriod}</p>
+                                    <p><strong>Daily Rate:</strong> {formatNumberDisplay(payrollResultForProject.dailyRate)}</p>
+                                    <p><strong>Regular Days Worked:</strong> {formatNumberDisplay(payrollResultForProject.regularDaysWorked)}</p>
+                                    <p><strong>Overtime Hours:</strong> {formatNumberDisplay(payrollResultForProject.overtimeHours)} (Factor: {payrollResultForProject.overtimeRateFactor}x)</p>
+                                    <hr className="my-2" />
+                                    <p><strong>Regular Pay:</strong> {formatNumberDisplay(payrollResultForProject.regularPay)}</p>
+                                    <p><strong>Overtime Pay:</strong> {formatNumberDisplay(payrollResultForProject.overtimePay)}</p>
+                                    <p className="font-medium"><strong>Gross Wage:</strong> {formatNumberDisplay(payrollResultForProject.grossWage)}</p>
+                                    <hr className="my-2" />
+                                    <h4 className="font-medium mt-2">Deductions:</h4>
+                                    {payrollResultForProject.deductions && payrollResultForProject.deductions.length > 0 ? (
+                                        payrollResultForProject.deductions.map((ded, index) => (<p key={index} className="flex justify-between text-red-600"><span>{ded.description}:</span><span>({formatNumberDisplay(ded.amount)})</span></p>))
+                                    ) : <p className="text-xs italic">No deductions applied.</p>}
+                                    <p className="font-medium flex justify-between"><strong>Total Deductions:</strong> <span>({formatNumberDisplay(payrollResultForProject.totalDeductions)})</span></p>
+                                    <hr className="my-2 border-t-2 border-gray-300" />
+                                    <p className="text-lg font-bold text-green-700 flex justify-between"><strong>NET PAY:</strong> <span>{formatNumberDisplay(payrollResultForProject.netPay)}</span></p>
+                                    {payrollResultForProject.notes && <p className="mt-2 text-xs italic"><strong>Notes:</strong> {payrollResultForProject.notes}</p>}
+                                </div>
+                            </div>
+                        ) : !selectedProjectEmployeeForPayroll ? (
+                            <>
+                                <h4 className="font-medium mb-2">Select an employee:</h4>
+                                {filteredEmployees.length > 0 ? (
+                                    <ul className="menu bg-base-100 rounded-box max-h-60 overflow-y-auto">
+                                        {filteredEmployees.map(emp => (
+                                            <li key={emp._id}><a onClick={() => setSelectedProjectEmployeeForPayroll({ ...emp, dailyRate: emp.wagePerDay })}>{emp.name} ({emp.role})</a></li>
+                                        ))}
+                                    </ul>
+                                ) : (
+                                    <p className="text-center text-gray-500 italic p-4">No employees assigned to this project.</p>
+                                )}
+                            </>
+                        ) : (
+                            <PayrollRunForm selectedEmployee={selectedProjectEmployeeForPayroll} onRunPayrollTrigger={handleProjectPayrollSubmitTrigger} isLoading={isProcessingProjectPayroll} />
+                        )}
+                        
+                        <div className="modal-action mt-4">
+                            {payrollResultForProject && (<button type="button" onClick={resetPayrollModal} className="btn btn-secondary"><RotateCcw size={16} className="mr-2"/>Run for Another</button>)}
+                            <button type="button" onClick={() => { setShowProjectPayrollModal(false); resetPayrollModal(); }} className="btn btn-ghost">Close</button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button onClick={() => { setShowProjectPayrollModal(false); resetPayrollModal(); }}>close</button></form>
+                </dialog>
+            )}
+            
+            {showConfirmModalProjectPayroll && modalActionProjectPayroll && (
+                 <ConfirmationModal
+                    isOpen={showConfirmModalProjectPayroll}
+                    onClose={handleModalCloseProjectPayroll}
+                    onConfirm={handleModalConfirmProjectPayroll}
+                    title={modalActionProjectPayroll.content.title}
+                    message={modalActionProjectPayroll.content.message}
+                    confirmText={modalActionProjectPayroll.content.confirmText}
+                />
+            )}
+
+            {selectedPayrollRecord && (
+                <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                    <div className="modal-box w-11/12 max-w-lg">
+                        <div className="flex justify-between items-center mb-4 border-b pb-2">
+                            <h3 className="font-bold text-lg">Payroll Receipt</h3>
+                             <button onClick={() => setSelectedPayrollRecord(null)} className="btn btn-sm btn-circle btn-ghost"><X size={20} /></button>
+                        </div>
+                        <div className="space-y-2 text-sm p-2">
+    <p><strong>Date Processed:</strong> {formatDate(selectedPayrollRecord.processedDate)}</p>
+    <p><strong>Employee:</strong> {selectedPayrollRecord.employeeName}</p>
+    <p><strong>Pay Period:</strong> {selectedPayrollRecord.payPeriod}</p>
+
+    <hr className="my-3 border-t border-gray-200"/>
+
+    <h4 className="font-semibold text-gray-800 text-md">Earnings</h4>
+    <div className="grid grid-cols-2 gap-x-4 pl-2">
+        <span>Regular Pay:</span>
+        <span className="text-right font-medium">₱{formatNumberDisplay(selectedPayrollRecord.regularPay)}</span>
+        <span className="text-xs text-gray-500 col-span-2 pl-2">
+            ({selectedPayrollRecord.regularDaysWorked} days @ ₱{formatNumberDisplay(selectedPayrollRecord.dailyRate)}/day)
+        </span>
+        
+        <span>Overtime Pay:</span>
+        <span className="text-right font-medium">₱{formatNumberDisplay(selectedPayrollRecord.overtimePay)}</span>
+        <span className="text-xs text-gray-500 col-span-2 pl-2">
+            ({selectedPayrollRecord.overtimeHours || 0} hours)
+        </span>
+    </div>
+    <hr className="my-2 border-t border-gray-200"/>
+    <div className="grid grid-cols-2 gap-x-4 pl-2 font-bold">
+        <span>Gross Wage:</span>
+        <span className="text-right">₱{formatNumberDisplay(selectedPayrollRecord.grossWage)}</span>
+    </div>
+
+    <hr className="my-3 border-t border-gray-200"/>
+    
+    <h4 className="font-semibold text-gray-800 text-md">Deductions</h4>
+    {selectedPayrollRecord.deductions?.length > 0 ? (
+        <div className="grid grid-cols-2 gap-x-4 pl-2 text-red-600">
+        {selectedPayrollRecord.deductions.map((ded, index) => (
+            <React.Fragment key={index}>
+                <span>{ded.description}:</span>
+                <span className="text-right">(₱{formatNumberDisplay(ded.amount)})</span>
+            </React.Fragment>
+        ))}
+        </div>
+    ) : <p className="pl-2 text-xs italic text-gray-500">No deductions applied.</p>}
+    <hr className="my-2 border-t border-gray-200"/>
+    <div className="grid grid-cols-2 gap-x-4 pl-2 font-bold text-red-600">
+        <span>Total Deductions:</span>
+        <span className="text-right">(₱{formatNumberDisplay(selectedPayrollRecord.totalDeductions)})</span>
+    </div>
+    
+    <hr className="my-3 border-t-2 border-gray-400"/>
+    
+    <div className="grid grid-cols-2 gap-x-4 text-lg font-bold text-green-700">
+        <span>NET PAY:</span>
+        <span className="text-right">₱{formatNumberDisplay(selectedPayrollRecord.netPay)}</span>
+    </div>
+
+    {selectedPayrollRecord.notes && (
+        <>
+            <hr className="my-3 border-t border-gray-200"/>
+            <p className="text-xs text-gray-600"><strong>Notes:</strong> {selectedPayrollRecord.notes}</p>
+        </>
+    )}
+</div>
+                        <div className="modal-action mt-6">
+                            <button onClick={() => setSelectedPayrollRecord(null)} className="btn">Close</button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button onClick={() => setSelectedPayrollRecord(null)}>close</button></form>
+                </dialog>
+            )}
+
+            {isDeleteEmployeeModalOpen && employeeToDelete && (
+                 <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                    <div className="modal-box">
+                        <h3 className="font-bold text-lg">Confirm Delete</h3>
+                        <p className="py-4">Are you sure you want to remove <strong>{employeeToDelete.name}</strong> from this project?</p>
+                        <div className="modal-action">
+                            <button className="btn btn-ghost" onClick={() => setIsDeleteEmployeeModalOpen(false)}>Cancel</button>
+                            <button className="btn btn-error" onClick={handleRemoveEmployee}>Delete</button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button onClick={() => setIsDeleteEmployeeModalOpen(false)}>close</button></form>
+                </dialog>
+            )}
+
+            {isUploadModalOpen && (
+                 <dialog open className="modal modal-open modal-bottom sm:modal-middle">
+                    <div className="modal-box">
+                        <h3 className="font-bold text-lg">Upload Document</h3>
+                        <input type="file" id="fileUploadInputModal" className="file-input file-input-bordered w-full my-4" onChange={(e) => setSelectedFile(e.target.files[0])} />
+                        <div className="modal-action">
+                            <button className="btn btn-ghost" onClick={() => setIsUploadModalOpen(false)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={handleFileUpload} disabled={uploading}>{uploading ? "Uploading..." : "Upload"}</button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button onClick={() => setIsUploadModalOpen(false)}>close</button></form>
+                </dialog>
+            )}
+
+            {isPreviewModalOpen && previewFile && (
+                 <dialog open className="modal modal-open">
+                    <div className="modal-box w-11/12 max-w-5xl">
+                        <h3 className="font-bold text-lg mb-2">{previewFile.name}</h3>
+                        <button onClick={() => setIsPreviewModalOpen(false)} className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+                        {previewFile.type.startsWith('image/') ? (
+                            <img src={previewFile.url} alt="Preview" className="max-w-full max-h-[80vh] rounded"/>
+                        ) : (
+                            <iframe src={previewFile.url} title={previewFile.name} className="w-full h-[80vh]" />
+                        )}
+                    </div>
+                     <form method="dialog" className="modal-backdrop"><button onClick={() => setIsPreviewModalOpen(false)}>close</button></form>
+                </dialog>
+            )}
                 </>
+
+                
             )}
         </div>
     );

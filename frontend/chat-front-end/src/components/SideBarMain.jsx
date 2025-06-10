@@ -10,7 +10,8 @@ import {
   Video,
   Folders,
   CircleHelp,
-  LogOut
+  LogOut,
+  File
 } from 'lucide-react';
 import { useAuthStore } from "../store/useAuthStore";
 
@@ -33,15 +34,14 @@ const SideBarMain = () => {
     { icon: <LayoutDashboard size={20} />, label: 'Dashboard', path: '/dashboard' },
     { icon: <MessageSquareText size={20} />, label: 'Chats', path: '/chats' },
     { icon: <ListChecks size={20} />, label: 'Projects', path: '/projects' },
-    { icon: <PhilippinePeso size={20} />, label: 'Payroll', path: '/payroll' },
     { icon: <Video size={20} />, label: 'Video Meetings', path: '/video-meetings' },
-    { icon: <Folders size={20} />, label: 'Files', path: '/file-handling' },
+    { icon: <Folders size={20} />, label: 'Blueprint Recommendation', path: '/blueprint' },
+    { icon: <File size={20} />, label: 'Quotation', path: '/quotation' },
   ];
 
   const sidebarMenuItemsOthers = [
     { icon: <Settings size={20} />, label: 'Settings', path: '/settings' },
     { icon: <Users size={20} />, label: 'Profile', path: '/profile' },
-    { icon: <CircleHelp size={20} />, label: 'Help', path: '/help' },
     { icon: <LogOut size={20} />, label: 'Logout', action: handleLogout },
   ];
 

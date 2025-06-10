@@ -2,6 +2,7 @@
 import express from 'express';
 import Project from '../models/project.model.js';
 import mongoose from 'mongoose';
+import axios from 'axios';
 // IMPORTS MODIFIED:
 // 'upload' (for documents) is now the default export from upload.js
 import upload from '../middleware/upload.js';
@@ -9,7 +10,7 @@ import upload from '../middleware/upload.js';
 import { uploadCoverPhoto } from '../middleware/upload.js';
 import { v2 as cloudinary } from 'cloudinary'; // Import Cloudinary to delete files
 import multer from 'multer'; // Import multer to catch MulterError for image upload
-
+import { getPayrollHistoryForProject } from '../controllers/payroll.controller.js';
 const router = express.Router();
 
 // This is the route for fetching all projects
@@ -39,6 +40,69 @@ router.get('/:projectId', async (req, res) => {
     } catch (err) {
         console.error('Error fetching project:', err);
         res.status(500).json({ message: 'Server error fetching project details', error: err.message });
+    }
+});
+
+// DELETE a project by ID
+router.delete('/:projectId', async (req, res) => {
+    try {
+        console.log("----- HIT: DELETE /api/projects/:projectId route -----");
+        console.log("Attempting to delete project with ID:", req.params.projectId);
+
+        if (!mongoose.isValidObjectId(req.params.projectId)) {
+            return res.status(400).json({ message: 'Invalid Project ID format' });
+        }
+
+        const project = await Project.findById(req.params.projectId);
+        if (!project) {
+            console.log("Project not found for deletion.");
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        // --- Optional but Recommended: Delete associated files from Cloudinary ---
+        // Delete all documents associated with the project
+        if (project.documents && project.documents.length > 0) {
+            console.log(`Deleting ${project.documents.length} associated documents from Cloudinary...`);
+            for (const doc of project.documents) {
+                try {
+                    // Extract public_id from URL, e.g., 'project_documents/filename'
+                    const urlParts = doc.url.split('/');
+                    const filenameWithExtension = urlParts[urlParts.length - 1];
+                    const filenameWithoutExtension = filenameWithExtension.split('.')[0];
+                    const publicId = `project_documents/${filenameWithoutExtension}`;
+
+                    await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' }); // use 'raw' for non-image files
+                    console.log(`Successfully deleted document: ${publicId}`);
+                } catch (cloudinaryErr) {
+                    console.warn(`Could not delete document ${doc.url} from Cloudinary:`, cloudinaryErr);
+                }
+            }
+        }
+
+        // Delete the project's cover photo if it exists
+        if (project.imageUrl) {
+            try {
+                const urlParts = project.imageUrl.split('/');
+                const filenameWithExtension = urlParts[urlParts.length - 1];
+                const filenameWithoutExtension = filenameWithExtension.split('.')[0];
+                const publicId = `project_covers/${filenameWithoutExtension}`;
+                
+                await cloudinary.uploader.destroy(publicId);
+                console.log(`Successfully deleted cover photo: ${publicId}`);
+            } catch (cloudinaryErr) {
+                console.warn(`Could not delete cover photo ${project.imageUrl} from Cloudinary:`, cloudinaryErr);
+            }
+        }
+        // --- End of Optional File Deletion ---
+
+        await Project.findByIdAndDelete(req.params.projectId);
+
+        console.log("Project successfully deleted from database.");
+        res.status(200).json({ message: 'Project deleted successfully' });
+
+    } catch (err) {
+        console.error('CRITICAL ERROR in DELETE /api/projects/:projectId route:', err);
+        res.status(500).json({ message: 'Server error deleting project', error: err.message });
     }
 });
 
@@ -359,6 +423,52 @@ router.delete('/:projectId/documents/:documentId', async (req, res) => {
     }
 });
 
+// @route   GET /api/projects/:projectId/documents/:documentId/view
+router.get('/:projectId/documents/:documentId/view', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.documentId)) {
+            return res.status(400).json({ message: 'Invalid ID format.' });
+        }
+        const project = await Project.findById(req.params.projectId);
+        if (!project) return res.status(404).json({ message: 'Project not found.' });
+
+        const document = project.documents.id(req.params.documentId);
+        if (!document) return res.status(404).json({ message: 'Document not found in this project.' });
+
+        // Redirect to the Cloudinary URL with flags that tell the browser to display it inline
+        res.redirect(document.url);
+
+    } catch (err) {
+        console.error('Error viewing document:', err);
+        res.status(500).json({ message: 'Server error viewing document' });
+    }
+});
+
+// @desc    Download a document
+// @route   GET /api/projects/:projectId/documents/:documentId/download
+router.get('/:projectId/documents/:documentId/download', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.documentId)) {
+            return res.status(400).json({ message: 'Invalid ID format.' });
+        }
+        const project = await Project.findById(req.params.projectId);
+        if (!project) return res.status(404).json({ message: 'Project not found.' });
+
+        const document = project.documents.id(req.params.documentId);
+        if (!document) return res.status(404).json({ message: 'Document not found in this project.' });
+
+        // This creates a special Cloudinary URL that forces a download prompt
+        const downloadUrl = document.url.replace('/upload/', `/upload/fl_attachment/`);
+
+        res.redirect(downloadUrl);
+        
+    } catch (err) {
+        console.error('Error downloading document:', err);
+        res.status(500).json({ message: 'Server error downloading document' });
+    }
+});
+
+
 
 // NEW: PATCH route to update a project's cover photo (imageUrl)
 // 'coverPhoto' here must match the 'name' attribute of your file input in the frontend form
@@ -419,35 +529,31 @@ router.patch('/:projectId/imageUrl', uploadCoverPhoto.single('coverPhoto'), asyn
         res.status(500).json({ message: 'Server error updating cover photo', error: err.message, stack: err.stack });
     }
 });
-
-// Route to view a document (inline)
 router.get('/:projectId/documents/:documentId/view', async (req, res) => {
     try {
-        if (!mongoose.isValidObjectId(req.params.projectId) || !mongoose.isValidObjectId(req.params.documentId)) {
-            return res.status(400).json({ message: 'Invalid ID format for project or document.' });
-        }
-
         const project = await Project.findById(req.params.projectId);
-        if (!project) {
-            return res.status(404).json({ message: 'Project not found.' });
-        }
+        if (!project) return res.status(404).json({ message: 'Project not found.' });
 
-        const document = project.documents.find(doc => doc._id.toString() === req.params.documentId);
-        if (!document) {
-            return res.status(404).json({ message: 'Document not found in this project.' });
-        }
+        const document = project.documents.id(req.params.documentId);
+        if (!document) return res.status(404).json({ message: 'Document not found.' });
 
-        // For viewing, we'll use Cloudinary's inline transformation
-        // This will force the browser to display the file instead of downloading it
-        const cloudinaryUrl = document.url.replace('/upload/', '/upload/fl_force_strip,fl_attachment:inline/');
-        
-        // Set appropriate headers for viewing
-        res.setHeader('Content-Type', getContentType(document.name));
+        // Fetch the file from the cloud as a downloadable stream
+        const response = await axios({
+            method: 'GET',
+            url: document.url,
+            responseType: 'stream'
+        });
+
+        // Set the headers to tell the browser to display the file IN the browser
         res.setHeader('Content-Disposition', 'inline');
-        res.redirect(cloudinaryUrl);
+        res.setHeader('Content-Type', getContentType(document.name)); // Uses your helper function
+
+        // Send the file stream directly to the user
+        response.data.pipe(res);
+
     } catch (err) {
         console.error('Error viewing document:', err);
-        res.status(500).json({ message: 'Server error viewing document', error: err.message });
+        res.status(500).json({ message: 'Server error viewing document' });
     }
 });
 
@@ -498,5 +604,5 @@ function getContentType(filename) {
     };
     return contentTypes[ext] || 'application/octet-stream';
 }
-
+router.get('/:projectId/payroll-history', getPayrollHistoryForProject);
 export default router;

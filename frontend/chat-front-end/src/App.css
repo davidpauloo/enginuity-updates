@@ -1,2 +1,7 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+body {
+  /* base-100 is the main background color for the current theme */
+  @apply bg-base-100;
+}

@@ -15,6 +15,10 @@ import PayrollPage from "./pages/PayrollPage.jsx";
 import VideoConferencePage from "./pages/VideoConferencePage.jsx";
 import FileHandlingPage from "./pages/FileHandlingPage.jsx";
 import ProjectDetailsPage from "./pages/ProjectDetails.jsx"; 
+import BlueprintPage from "./pages/BlueprintPage.jsx"; 
+import QuotationPage from "./pages/QuotationPage.jsx"; 
+
+
 
 
 import { useAuthStore } from "./store/useAuthStore";
@@ -53,7 +57,7 @@ const App = () => {
 
   return (
     // The root div defines the overall theme and ensures the app takes full viewport height
-    <div data-theme={theme} className="flex flex-col h-screen overflow-hidden"> {/* Added overflow-hidden to root */}
+    <div data-theme={theme} className="h-full flex flex-col bg-base-200"> {/* Added overflow-hidden to root */}
       {/* Conditionally render the main layout based on authentication and route */}
       {showLayout ? (
         <> {/* Fragment to group Navbar, Sidebar, and main content */}
@@ -64,7 +68,7 @@ const App = () => {
             <SideBarMain /> {/* Collapsible main application sidebar */}
             {/* Main content area where routed pages will render.
                 It should be scrollable if content overflows. */}
-            <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-base-200">
+            <main className="flex-1 overflow-y-auto bg-base-200">
               <Routes>
                 {/* Authenticated Routes - only accessible if authUser is true */}
                 <Route path="/dashboard" element={<DashboardPage />} />
@@ -76,6 +80,8 @@ const App = () => {
                 <Route path="/file-handling" element={<FileHandlingPage/>}/>
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/blueprint" element={<BlueprintPage />} />
+                <Route path="/quotation" element={<QuotationPage />} />
                 {/* Add other authenticated routes here */}
 
                 {/* Fallback redirect for any unknown authenticated path:

@@ -5,11 +5,16 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from 'url';
-
+import cloudConvertRoutes from "./routes/cloudConvert.route.js";
 import { connectDB } from "./lib/db.js";
 import authRoutes from "./routes/auth.route.js";
 import messageRoutes from "./routes/message.routes.js";
 import projectRoutes from "./routes/project.routes.js";
+import quotationRoutes from "./routes/quotation.routes.js";
+import itemRoutes from "./routes/item.routes.js";
+import payrollRecordRoutes from "./routes/payrollRecord.routes.js";
+import payrollRoutes from "./routes/payroll.routes.js";
+
 import { app, server } from "./lib/socket.js"; // This import is crucial
 
 dotenv.config();
@@ -31,6 +36,11 @@ app.use(cors({
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/projects", projectRoutes);
+app.use("/api/quotations", quotationRoutes);
+app.use("/api/items", itemRoutes);
+app.use("/api/payroll-records", payrollRecordRoutes);
+app.use("/api/payrolls", payrollRoutes);
+
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 

@@ -3,7 +3,7 @@ import ProjectForm from '../components/ProjectForm';
 import { axiosInstance } from '../lib/axios';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-
+import { Trash2 } from 'lucide-react';
 const ProjectPage = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   // State for ongoing/upcoming projects
@@ -68,6 +68,26 @@ const ProjectPage = () => {
   const handleAddProjectClick = () => setIsModalOpen(true);
   const handleCloseModal = () => setIsModalOpen(false);
 
+   const handleDeleteProject = async (projectId, event) => {
+    // Stop the click from triggering the <Link> navigation
+    event.stopPropagation();
+    event.preventDefault();
+
+    // Show a confirmation dialog before deleting
+    if (window.confirm("Are you sure you want to permanently delete this project?")) {
+        try {
+            // This line sends the DELETE request to your new backend route
+            await axiosInstance.delete(`/projects/${projectId}`);
+            toast.success("Project deleted successfully!");
+            // Refresh the project lists to remove the deleted project
+            fetchProjects();
+        } catch (error) {
+            const errorMessage = error.response?.data?.message || "Failed to delete project.";
+            console.error("Error deleting project:", error);
+            toast.error(errorMessage);
+        }
+    }
+};
   const handleFormSubmit = async (formData) => {
     try {
       // const response = await axiosInstance.post('/projects', formData); // Path relative to baseURL
@@ -117,6 +137,14 @@ const ProjectPage = () => {
                   backgroundPosition: 'center',
                 }}
               >
+                {/* NEW: Delete button positioned over the card */}
+                                <button
+                                    onClick={(e) => handleDeleteProject(project._id, e)}
+                                    className="absolute top-3 right-3 z-20 p-2 bg-black/30 rounded-full text-white/80 hover:bg-red-500 hover:text-white transition-colors"
+                                    aria-label="Delete Project"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
                 {/* Overlay */}
                 <div className="absolute inset-0 bg-black/40" />
                 {/* Project Info */}
