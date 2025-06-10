@@ -44,6 +44,25 @@ app.use("/api/payrolls", payrollRoutes);
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+const allowedOrigins = [
+  'http://localhost:5173', // Your local frontend
+  'https://enguinity-zt8g.vercel.app' // Your future live frontend URL
+];
+// --------------
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true
+}));
+
 if (process.env.NODE_ENV === "production") {
     const frontendDistPath = path.join(__dirname, "../frontend/chat-front-end/dist");
     app.use(express.static(frontendDistPath));
