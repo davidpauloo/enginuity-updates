@@ -63,9 +63,7 @@ import React, { useState } from "react";
              reader.onerror = reject; 
 
              reader.readAsDataURL(file); 
-
          }); 
-
      }; 
 
 

@@ -55,15 +55,30 @@ export const login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    console.log('🔐 LOGIN ATTEMPT for email:', email);
+    
     const user = await User.findOne({ email });
-    if (!user)
+    if (!user) {
+      console.log('❌ User not found for email:', email);
       return res.status(400).json({ message: "Invalid credentials" });
+    }
 
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
-    if (!isPasswordCorrect)
+    if (!isPasswordCorrect) {
+      console.log('❌ Invalid password for user:', email);
       return res.status(400).json({ message: "Invalid credentials" });
+    }
 
-    generateToken(user._id, res);
+    console.log('✅ Password correct, generating token for user:', user._id);
+    
+    // Generate token and log the result
+    const token = generateToken(user._id, res);
+    console.log('🍪 Token generated:', token ? 'SUCCESS' : 'FAILED');
+    console.log('🍪 Token length:', token ? token.length : 'N/A');
+    
+    // Log response headers being set
+    console.log('📤 Response headers about to be sent');
+    console.log('📤 Set-Cookie header will be added by generateToken function');
 
     res.status(200).json({
       _id: user._id,
@@ -71,6 +86,9 @@ export const login = async (req, res) => {
       email: user.email,
       profilePic: user.profilePic,
     });
+    
+    console.log('✅ Login response sent successfully for user:', email);
+    
   } catch (error) {
     console.error("❌ Error in login controller:", error.message);
     res.status(500).json({ message: "Internal Server Error" });
