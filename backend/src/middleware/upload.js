@@ -1,98 +1,117 @@
 // backend/src/middleware/upload.js
-import multer from 'multer';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import { v2 as cloudinary } from 'cloudinary';
-import { fileURLToPath } from 'url';
-import path from 'path';
+import multer from "multer";
+import { CloudinaryStorage } from "multer-storage-cloudinary";
+import { v2 as cloudinary } from "cloudinary";
+import path from "path";
 
-// Not strictly needed for CloudinaryStorage but good to keep for consistency
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Configure Cloudinary (essential for both storage instances)
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true // Use HTTPS URLs
+  secure: true,
 });
 
-// --- Storage and Multer instance for General Documents (and default export) ---
+// Document storage (raw files allowed)
 const documentStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
-    folder: 'project_documents', // Your existing folder for general documents
-    allowed_formats: ['jpeg', 'jpg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
-    resource_type: 'raw', // Changed from 'auto' to 'raw' for documents
-    access_mode: 'public', // Make files publicly accessible
-    type: 'upload', // Explicitly set upload type
+    folder: "project_documents",
+    allowed_formats: [
+      "jpeg","jpg","png","gif","pdf","doc","docx","xls","xlsx","txt","csv","zip","ppt","pptx","rar","7z",
+    ],
+    resource_type: "raw",
+    access_mode: "public",
+    type: "upload",
     public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      return `${file.fieldname}-doc-${uniqueSuffix}`; // Added '-doc-' for clarity
-    }
-  }
+      const base = (file.originalname || "file").replace(/\.[^/.]+$/, "");
+      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      return `${base}-${unique}`;
+    },
+  },
 });
 
+// Server-side MIME filter for documents
 const documentFileFilter = (req, file, cb) => {
-    const allowedMimes = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|txt/;
-    const extname = allowedMimes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedMimes.test(file.mimetype);
-
-    if (extname && mimetype) {
-        cb(null, true);
-    } else {
-        cb(new Error('Invalid file type. Only images, PDFs, and common documents are allowed!'), false);
-    }
+  const allowed = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|txt|csv|zip|ppt|pptx|rar|7z/;
+  const extname = allowed.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowed.test(file.mimetype);
+  if (extname && mimetype) cb(null, true);
+  else cb(new Error("Invalid file type."), false);
 };
 
-const uploadDocument = multer({ // Defined as a const
+// Multer instance for documents (default export)
+const uploadDocument = multer({
   storage: documentStorage,
-  limits: {
-      fileSize: 1024 * 1024 * 10 // 10MB file size limit for documents
-  },
-  fileFilter: documentFileFilter
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: documentFileFilter,
 });
 
-// --- NEW: Storage and Multer instance for Cover Photos ---
-const coverPhotoStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+// Avatar storage configuration
+const avatarStorage = new CloudinaryStorage({
+  cloudinary,
   params: {
-    folder: 'project_covers', // NEW DEDICATED FOLDER for cover photos
-    allowed_formats: ['jpeg', 'jpg', 'png', 'webp'], // Typically only image formats for covers
-    resource_type: 'image', // Ensure it's treated as an image
-    access_mode: 'public', // Make cover photos publicly accessible
-    type: 'upload', // Explicitly set upload type
+    folder: "user_avatars",
+    allowed_formats: ["jpeg", "jpg", "png", "webp"],
+    resource_type: "image",
+    access_mode: "public",
+    type: "upload",
     public_id: (req, file) => {
-      // A more predictable name for covers using project ID if available
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      // Use req.params.projectId if available, otherwise 'new' (for new project creation, if you add that route later)
-      const projectIdPart = req.params.projectId || 'new';
-      return `cover-${projectIdPart}-${uniqueSuffix}`;
-    }
-  }
+      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const uid = req.user?._id || "guest";
+      return `avatar-${uid}-${unique}`;
+    },
+  },
 });
 
-const coverPhotoFileFilter = (req, file, cb) => {
-    const allowedMimes = /jpeg|jpg|png|webp/; // Only image types for covers
-    const extname = allowedMimes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedMimes.test(file.mimetype);
-
-    if (extname && mimetype) {
-        cb(null, true);
-    } else {
-        cb(new Error('Invalid image file. Only JPG, PNG, and WebP are allowed for cover photos!'), false);
-    }
+// Avatar file filter
+const avatarFileFilter = (req, file, cb) => {
+  const allowed = /jpeg|jpg|png|webp/;
+  const extname = allowed.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowed.test(file.mimetype);
+  if (extname && mimetype) cb(null, true);
+  else cb(new Error("Invalid avatar file."), false);
 };
 
-export const uploadCoverPhoto = multer({ // Exported as a named export
-  storage: coverPhotoStorage,
-  limits: {
-      fileSize: 1024 * 1024 * 5 // 5MB file size limit for cover photos (adjust as needed)
-  },
-  fileFilter: coverPhotoFileFilter
+// Named export for avatars
+export const uploadAvatar = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: avatarFileFilter,
 });
 
-// --- Default Export ---
-// This maintains the 'default' export for backward compatibility with existing routes
-// that might still be importing 'upload' without curly braces.
-export default uploadDocument; // Exporting the document upload instance as default
+// Cover photo storage configuration
+const coverPhotoStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "project_covers",
+    allowed_formats: ["jpeg", "jpg", "png", "webp"],
+    resource_type: "image",
+    access_mode: "public",
+    type: "upload",
+    public_id: (req, file) => {
+      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const pid = req.params.projectId || "new";
+      return `cover-${pid}-${unique}`;
+    },
+  },
+});
+
+// Cover photo file filter
+const coverPhotoFileFilter = (req, file, cb) => {
+  const allowed = /jpeg|jpg|png|webp/;
+  const extname = allowed.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowed.test(file.mimetype);
+  if (extname && mimetype) cb(null, true);
+  else cb(new Error("Invalid image file."), false);
+};
+
+// Named export for cover photos
+export const uploadCoverPhoto = multer({
+  storage: coverPhotoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: coverPhotoFileFilter,
+});
+
+// Default export must be the document uploader used as upload.single("file")
+export default uploadDocument;

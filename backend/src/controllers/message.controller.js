@@ -1,14 +1,69 @@
-// src/controllers/message.controller.js
-import User from "../models/user.model.js";
+import mongoose from "mongoose";
 import Message from "../models/message.model.js";
-import cloudinary from "../lib/cloudinary.js";
+import User from "../models/user.model.js";
+import Project from "../models/project.model.js";
+import SuperAdmin from "../models/superAdmin.model.js";
+import { emitToUser } from "../lib/socket.js";
 
-import { getReceiverSocketId, io } from "../lib/socket.js";
-
+// =====================
+// 📌 Sidebar Users
+// =====================
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
-    const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password");
+    const role = req.user.role;
+
+    let users = [];
+
+    if (role === "superadmin") {
+      users = await User.find({ _id: { $ne: loggedInUserId } }).select(
+        "-password -__v -loginAttempts -lockedUntil"
+      );
+    } else if (role === "project_manager") {
+      const assignedProjects = await Project.find({
+        $or: [
+          { projectManager: loggedInUserId },
+          { projectExtras: loggedInUserId },
+        ],
+      }).select("client");
+
+      const clientIds = assignedProjects.map((p) => p.client).filter(Boolean);
+
+      const clients = await User.find({ _id: { $in: clientIds } }).select(
+        "-password -__v -loginAttempts -lockedUntil"
+      );
+
+      const superAdmins = await SuperAdmin.find({}).select(
+        "-password -__v -loginAttempts -lockedUntil"
+      );
+
+      const byId = new Map();
+      for (const u of [...clients, ...superAdmins]) byId.set(String(u._id), u);
+      users = Array.from(byId.values());
+    } else if (role === "client") {
+      const myProjects = await Project.find({
+        client: loggedInUserId,
+      }).select("projectManager projectExtras");
+
+      const pmIds = [];
+      for (const p of myProjects) {
+        if (p.projectManager) pmIds.push(p.projectManager);
+        if (Array.isArray(p.projectExtras)) pmIds.push(...p.projectExtras);
+      }
+
+      const pms = await User.find({ _id: { $in: pmIds } }).select(
+        "-password -__v -loginAttempts -lockedUntil"
+      );
+
+      const superAdmins = await SuperAdmin.find({}).select(
+        "-password -__v -loginAttempts -lockedUntil"
+      );
+
+      const byId = new Map();
+      for (const u of [...pms, ...superAdmins]) byId.set(String(u._id), u);
+      users = Array.from(byId.values());
+    }
+
     res.status(200).json(users);
   } catch (error) {
     console.error("Error in getUsersForSidebar:", error.message);
@@ -16,76 +71,116 @@ export const getUsersForSidebar = async (req, res) => {
   }
 };
 
+// =====================
+// 📌 Get Messages
+// =====================
 export const getMessages = async (req, res) => {
   try {
-    const { id: userToChatId } = req.params;
-    const myId = req.user._id;
+    const loggedInUserId = req.user._id;
+    const { id: otherUserId } = req.params;
+
+    const me = new mongoose.Types.ObjectId(loggedInUserId);
+    const other = new mongoose.Types.ObjectId(otherUserId);
 
     const messages = await Message.find({
       $or: [
-        { senderId: myId, receiverId: userToChatId },
-        { senderId: userToChatId, recieverId: myId },
+        { senderId: me, receiverId: other },
+        { senderId: other, receiverId: me },
       ],
-    });
+    }).sort({ createdAt: 1 });
 
-    res.status(200).json(messages);
+    // Manual populate (sender/receiver may be in User or SuperAdmin)
+    const populatedMessages = await Promise.all(
+      messages.map(async (msg) => {
+        const msgObj = msg.toObject();
+
+        let sender = await User.findById(msg.senderId).select("fullName profilePic");
+        if (!sender) sender = await SuperAdmin.findById(msg.senderId).select("fullName profilePic");
+
+        let receiver = await User.findById(msg.receiverId).select("fullName profilePic");
+        if (!receiver) receiver = await SuperAdmin.findById(msg.receiverId).select("fullName profilePic");
+
+        return {
+          ...msgObj,
+          senderId: sender || msg.senderId,
+          receiverId: receiver || msg.receiverId,
+        };
+      })
+    );
+
+    res.status(200).json(populatedMessages);
   } catch (error) {
-    console.log("Error in getMessages controller:", error.message);
-    res.status(500).json({ error: "Internal Server error" });
+    console.error("Error in getMessages:", error.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
+// =====================
+// 📌 Send Message
+// =====================
 export const sendMessage = async (req, res) => {
   try {
-    console.log('📤 SEND MESSAGE DEBUG START:');
-    console.log('📤 Request body:', req.body);
-    console.log('📤 Sender ID:', req.user._id);
-    console.log('📤 Receiver ID:', req.params.id);
-    
-    const { text, image } = req.body;
+    const loggedInUserId = req.user._id;
     const { id: receiverId } = req.params;
-    const senderId = req.user._id;
+    const { text, image } = req.body;
 
-    let imageUrl;
-    if (image) {
-      console.log('📤 Processing image upload...');
-      const uploadResponse = await cloudinary.uploader.upload(image);
-      imageUrl = uploadResponse.secure_url;
-      console.log('📤 Image uploaded:', imageUrl);
+    const cleanText = typeof text === "string" ? text.trim() : "";
+
+    if (!cleanText && !image) {
+      return res.status(400).json({ error: "Message cannot be empty" });
     }
 
-    console.log('📤 Creating new message...');
     const newMessage = new Message({
-      senderId,
-      receiverId, // Make sure this matches your schema
-      text,
-      image: imageUrl,
+      senderId: loggedInUserId,
+      receiverId,
+      text: cleanText,
+      image: image || "",
     });
 
-    await newMessage.save();
-    console.log('✅ Message saved to database:', newMessage._id);
+    const saved = await newMessage.save();
 
-    // Debug the socket emission process
-    console.log('🔍 Looking for receiver socket...');
-    const receiverSocketId = getReceiverSocketId(receiverId);
-    
-    if (receiverSocketId) {
-      console.log('📤 Found receiver socket, emitting message...');
-      console.log('📤 Socket ID:', receiverSocketId);
-      console.log('📤 Message being sent:', newMessage);
-      
-      io.to(receiverSocketId).emit("newMessage", newMessage);
-      console.log('✅ Message emitted successfully via Socket.IO');
-    } else {
-      console.log('❌ Receiver not online - socket ID not found');
-    }
+    // Manual populate for UI convenience
+    let sender = await User.findById(saved.senderId).select("fullName profilePic");
+    if (!sender) sender = await SuperAdmin.findById(saved.senderId).select("fullName profilePic");
 
-    console.log('📤 SEND MESSAGE DEBUG END - Responding to client');
-    res.status(201).json(newMessage);
-    
+    let receiver = await User.findById(saved.receiverId).select("fullName profilePic");
+    if (!receiver) receiver = await SuperAdmin.findById(saved.receiverId).select("fullName profilePic");
+
+    const populated = {
+      ...saved.toObject(),
+      senderId: sender || saved.senderId,
+      receiverId: receiver || saved.receiverId,
+    };
+
+    // DEBUG: log ids before emit
+    console.log("SEND EMIT -> receiver:", String(receiverId), {
+      msgId: String(populated._id),
+      senderId: String(
+        typeof populated.senderId === "object" ? populated.senderId?._id : populated.senderId
+      ),
+      receiverId: String(
+        typeof populated.receiverId === "object" ? populated.receiverId?._id : populated.receiverId
+      ),
+    });
+
+    // Emit compact payload with string ids to allow client-side filtering/counting
+    emitToUser(receiverId, "message:received", {
+      _id: String(populated._id),
+      text: populated.text || "",
+      image: populated.image || "",
+      createdAt: populated.createdAt,
+      updatedAt: populated.updatedAt,
+      senderId: String(
+        typeof populated.senderId === "object" ? populated.senderId?._id : populated.senderId
+      ),
+      receiverId: String(
+        typeof populated.receiverId === "object" ? populated.receiverId?._id : populated.receiverId
+      ),
+    });
+
+    return res.status(201).json(populated);
   } catch (error) {
-    console.log("❌ Error in sendMessage controller:", error.message);
-    console.log("❌ Full error stack:", error.stack);
+    console.error("Error in sendMessage:", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };

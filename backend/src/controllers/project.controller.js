@@ -1,323 +1,420 @@
-// src/controllers/project.controller.js
+// controllers/project.controller.js
+import mongoose from "mongoose";
+import User from "../models/user.model.js";
+import Project from "../models/project.model.js";
 
-// REMOVE THESE IMPORTS FROM HERE IF THEY ARE ONLY FOR MULTER SETUP
-// import { fileURLToPath } from 'url';
-// import { dirname } from 'path';
-// import fs from 'fs'; // KEEP this if used for fs.unlinkSync later in the file
-// import path from 'path'; // KEEP this if used for path.extname or other path ops later
-// REMOVE THIS: import multer from 'multer';
+/* -------------------------- helpers / population -------------------------- */
 
-import Project from '../models/project.model.js';
-import asyncHandler from '../middleware/asyncHandler.js';
-import mongoose from 'mongoose';
-import User from '../models/user.model.js'; // Keep this if you still use it for `createdBy` or `activities.assignedTo`
+const populateProject = (query) =>
+  query
+    .populate("projectManager", "fullName contactNumber")
+    .populate("projectExtras", "fullName contactNumber")
+    .populate("client", "fullName email contactNumber")
+    .lean();
 
-// Set up __dirname for ES Modules (Keep if needed for other non-multer path logic)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+/* -------------------------------- projects -------------------------------- */
 
-// REMOVE ALL MULTER CONFIGURATION BLOCKS FROM HERE
-// Including: UPLOADS_BASE_DIR, PROJECT_DOCUMENTS_DIR, fs.mkdirSync calls, storage, upload
+export const createProject = async (req, res) => {
+  try {
+    const {
+      clientId,
+      projectManagerId,
+      description,
+      location,
+      contactNumber,
+      startDate,
+      targetDeadline,
+      clientName,
+      imageUrl,
+      budget,
+    } = req.body;
 
-// Helper function for ID validation
-const validateObjectId = (id, paramName = 'ID') => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new Error(`Invalid ${paramName} format`);
+    const client = await User.findOne({ _id: clientId, role: "client" });
+    if (!client) return res.status(404).json({ message: "Client not found" });
+
+    let pmId = null;
+    if (projectManagerId) {
+      const pm = await User.findOne({ _id: projectManagerId, role: "project_manager" });
+      if (!pm) return res.status(404).json({ message: "Project Manager not found" });
+      pmId = pm._id;
+    }
+
+    const project = await Project.create({
+      client: client._id,
+      projectManager: pmId,
+      description,
+      location,
+      contactNumber,
+      startDate,
+      targetDeadline,
+      clientName,
+      imageUrl,
+      budget,
+    });
+
+    const populated = await populateProject(Project.findById(project._id));
+    return res.status(201).json(populated);
+  } catch (error) {
+    console.error("Error creating project:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
-// @desc    Create a new project
-// @route   POST /api/projects
-// @access  Private
-const createProject = asyncHandler(async (req, res) => {
-  const {
-    clientName,
-    location,
-    description,
-    startDate,
-    targetDeadline,
-    budget,
-    status
-  } = req.body;
-
-  // FIX: Make sure targetDeadline is correctly validated as required.
-  // The '!!' operator converts to boolean, so `!!targetDeadline` means "if targetDeadline is truthy".
-  // If it's a required field, you want `!targetDeadline` (if targetDeadline is falsy/missing).
-  if (!clientName || !location || !startDate || !targetDeadline) {
-    res.status(400);
-    throw new Error('Please provide all required project fields: Client Name, Location, Start Date, Target Deadline.');
-  }
-  if (isNaN(new Date(startDate).getTime()) || isNaN(new Date(targetDeadline).getTime())) {
-    res.status(400);
-    throw new Error('Invalid date format for Start Date or Target Deadline.');
-  }
-  if (budget && isNaN(parseFloat(budget.estimated))) {
-      res.status(400);
-      throw new Error('Budget estimated value must be a number.');
-  }
-
-  const project = new Project({
-    clientName,
-    location,
-    description,
-    startDate: new Date(startDate),
-    targetDeadline: new Date(targetDeadline),
-    budget: budget ? {
-        estimated: parseFloat(budget.estimated),
-        currency: budget.currency || 'USD'
-    } : undefined,
-    status: status || 'planning',
-    createdBy: req.user._id,
-  });
-
-  const createdProject = await project.save();
-  res.status(201).json(createdProject);
-});
-
-// @desc    Add activity to project
-// @route   POST /api/projects/:id/activities
-// @access  Private
-const addActivityToProject = asyncHandler(async (req, res) => {
-  const { projectId } = req.params;
-  const { name, description, startDate, dueDate } = req.body;
-
-  // Validate project ID
-  validateObjectId(projectId, 'project ID');
-
-  // Find the project
-  const project = await Project.findById(projectId);
-  if (!project) {
-    res.status(404);
-    throw new Error('Project not found');
-  }
-
-  // Validate required fields
-  if (!name || !startDate || !dueDate) {
-    res.status(400);
-    throw new Error('Name, Start Date, and Due Date are required for an activity');
-  }
-
-  // Validate date formats
-  if (isNaN(new Date(startDate).getTime()) || isNaN(new Date(dueDate).getTime())) {
-    res.status(400);
-    throw new Error('Invalid date format for Start Date or Due Date');
-  }
-
-  // Create new activity object
-  const newActivity = {
-    name: name.trim(),
-    description: description ? description.trim() : '',
-    startDate: new Date(startDate),
-    dueDate: new Date(dueDate),
-    status: 'pending',
-    createdAt: new Date()
-  };
-
-  // Add activity to project
-  project.activities.push(newActivity);
-  
-  // Save the project
-  const updatedProject = await project.save();
-
-  // Validate the save operation
-  if (!updatedProject || !Array.isArray(updatedProject.activities)) {
-    res.status(500);
-    throw new Error('Error saving project with new activity');
-  }
-
-  // Return success response
-  res.status(201).json({
-    message: 'Activity added successfully',
-    project: updatedProject
-  });
-});
-
-// @desc    Add employee to project
-// @route   POST /api/projects/:id/employees
-// @access  Private
-const addEmployeeToProject = asyncHandler(async (req, res) => {
-  const { projectId } = req.params;
-  const { name, role, wagePerDay, startDate, endDate } = req.body;
-
-  // Validate project ID
-  validateObjectId(projectId, 'project ID');
-
-  // Find the project
-  const project = await Project.findById(projectId);
-  if (!project) {
-    res.status(404);
-    throw new Error('Project not found');
-  }
-
-  // Validate required fields
-  if (!name || !role || !wagePerDay || !startDate) {
-    res.status(400);
-    throw new Error('Name, Role, Wage per Day, and Start Date are required for an employee');
-  }
-
-  // Validate wage is a positive number
-  const wage = parseFloat(wagePerDay);
-  if (isNaN(wage) || wage < 0) {
-    res.status(400);
-    throw new Error('Wage per Day must be a positive number');
-  }
-
-  // Validate date formats
-  if (isNaN(new Date(startDate).getTime()) || (endDate && isNaN(new Date(endDate).getTime()))) {
-    res.status(400);
-    throw new Error('Invalid date format for Start Date or End Date');
-  }
-
-  // Create new employee object
-  const newEmployee = {
-    name: name.trim(),
-    role: role.trim(),
-    wagePerDay: wage,
-    startDate: new Date(startDate),
-    endDate: endDate ? new Date(endDate) : undefined,
-    assignedAt: new Date()
-  };
-
-  // Add employee to project
-  project.employees.push(newEmployee);
-  
-  // Save the project
-  const updatedProject = await project.save();
-
-  // Validate the save operation
-  if (!updatedProject || !Array.isArray(updatedProject.employees)) {
-    res.status(500);
-    throw new Error('Error saving project with new employee');
-  }
-
-  // Return success response
-  res.status(201).json({
-    message: 'Employee added successfully',
-    project: updatedProject
-  });
-});
-
-// ... (keep getProjects, getProjectById, updateProject, addEmployeeToProject, removeEmployeeFromProject, updateActivity functions as they are) ...
-
-// @desc    Upload document to project
-// @route   POST /api/projects/:id/documents
-// @access  Private
-const uploadDocumentToProject = asyncHandler(async (req, res) => {
-  const { id: projectId } = req.params;
-  validateObjectId(projectId, 'project ID');
-
-  const file = req.file; // This 'req.file' is provided by Multer from the routes file
-
-  if (!file) {
-    res.status(400);
-    throw new Error('No file uploaded.');
-  }
-
-  const project = await Project.findById(projectId);
-  if (!project) {
-    res.status(404);
-    throw new Error('Project not found');
-  }
-
-  project.documents.push({
-    fileName: file.originalname,
-    filePath: file.path,
-    fileType: file.mimetype,
-    uploadedAt: new Date()
-  });
-
-  const updatedProject = await project.save();
-
-  res.status(201).json({
-    message: 'Document uploaded successfully',
-    project: updatedProject
-  });
-});
-
-// @desc    Delete document from project
-// @route   DELETE /api/projects/:id/documents/:documentId
-// @access  Private
-const deleteDocumentFromProject = asyncHandler(async (req, res) => {
-  const { id: projectId, documentId } = req.params;
-  validateObjectId(projectId, 'project ID');
-  validateObjectId(documentId, 'document ID');
-
-  const project = await Project.findById(projectId);
-  if (!project) {
-    res.status(404);
-    throw new Error('Project not found');
-  }
-
-  const document = project.documents.id(documentId);
-  if (!document) {
-    res.status(404);
-    throw new Error('Document not found in this project.');
-  }
-
-  // KEEP fs.unlinkSync here as it's a file system operation needed by the controller
+export const getProjects = async (req, res) => {
   try {
-    if (fs.existsSync(document.filePath)) {
-        fs.unlinkSync(document.filePath);
+    const { assignedTo, clientId, status } = req.query;
+    const filter = {};
+
+    if (assignedTo && mongoose.Types.ObjectId.isValid(assignedTo)) {
+      filter.$or = [
+        { projectManager: new mongoose.Types.ObjectId(assignedTo) },
+        { projectExtras: new mongoose.Types.ObjectId(assignedTo) },
+      ];
+    }
+
+    if (clientId && mongoose.Types.ObjectId.isValid(clientId)) {
+      filter.client = new mongoose.Types.ObjectId(clientId);
+    }
+    if (status) filter.status = status;
+
+    if (!assignedTo && req.user && req.user.role === "project_manager") {
+      filter.$or = [{ projectManager: req.user._id }, { projectExtras: req.user._id }];
+    }
+    if (!clientId && req.user && req.user.role === "client") {
+      filter.client = req.user._id;
+    }
+
+    const projects = await populateProject(Project.find(filter));
+    return res.json(projects);
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const getProjectById = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: "Invalid project id" });
+    }
+
+    const project = await populateProject(Project.findById(projectId));
+    if (!project) return res.status(404).json({ message: "Project not found" });
+
+    // ensure progress present (backend or derived)
+    if (Array.isArray(project.activities) && project.activities.length > 0) {
+      const completed = project.activities.filter((a) => a.status === "completed").length;
+      project.progress = Math.round((completed / project.activities.length) * 100);
     } else {
-        console.warn(`File not found on disk for document ID: ${documentId}, path: ${document.filePath}`);
+      project.progress = 0;
     }
-  } catch (err) {
-    console.error('Error deleting file from filesystem:', err);
+
+    return res.json(project);
+  } catch (error) {
+    console.error("Error fetching project:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
+};
 
-  project.documents.pull({ _id: documentId });
+export const assignProjectManager = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { projectManagerId } = req.body;
 
-  const updatedProject = await project.save();
+    const manager = await User.findOne({ _id: projectManagerId, role: "project_manager" });
+    if (!manager) return res.status(404).json({ message: "Project Manager not found" });
 
-  res.status(200).json({
-    message: 'Document deleted successfully',
-    project: updatedProject
-  });
-});
+    const project = await populateProject(
+      Project.findByIdAndUpdate(projectId, { projectManager: manager._id }, { new: true })
+    );
 
-// @desc    Delete project
-// @route   DELETE /api/projects/:id
-// @access  Private
-const deleteProject = asyncHandler(async (req, res) => {
-  const { id: projectId } = req.params;
-  validateObjectId(projectId, 'project ID');
-
-  const project = await Project.findById(projectId);
-  if (!project) {
-    res.status(404);
-    throw new Error('Project not found');
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    return res.json(project);
+  } catch (error) {
+    console.error("Error assigning project manager:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
+};
 
-  // KEEP fs.unlinkSync here for deleting associated files
-  project.documents.forEach(doc => {
-    try {
-      if (doc.filePath && fs.existsSync(doc.filePath)) {
-        fs.unlinkSync(doc.filePath);
-      }
-    } catch (err) {
-      console.error(`Error deleting file ${doc.filePath} during project deletion:`, err);
+export const updateProjectStatus = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { status } = req.body;
+
+    const project = await populateProject(
+      Project.findByIdAndUpdate(projectId, { status }, { new: true })
+    );
+
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    return res.json(project);
+  } catch (error) {
+    console.error("Error updating project status:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const addProjectManagers = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    let { managerIds } = req.body;
+
+    if (!managerIds) return res.status(400).json({ message: "managerIds required" });
+    if (!Array.isArray(managerIds)) managerIds = [managerIds];
+
+    const validIds = managerIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length !== managerIds.length) {
+      return res.status(400).json({ message: "Invalid manager id(s) detected" });
     }
-  });
 
-  await Project.deleteOne({ _id: projectId });
+    const foundCount = await User.countDocuments({
+      _id: { $in: validIds },
+      role: "project_manager",
+    });
+    if (foundCount !== validIds.length) {
+      return res.status(404).json({ message: "One or more managers not found" });
+    }
 
-  res.status(200).json({
-    message: 'Project and all associated data deleted successfully'
-  });
-});
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $addToSet: { projectExtras: { $each: validIds } } },
+        { new: true }
+      )
+    );
 
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error adding project managers:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
 
-// Exporting functions
-export {
-  createProject,
-  getProjects,
-  getProjectById,
-  updateProject,
-  addEmployeeToProject,
-  removeEmployeeFromProject,
-  addActivityToProject,
-  updateActivity,
-  uploadDocumentToProject,
-  deleteDocumentFromProject,
-  deleteProject
+export const removeProjectManagers = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    let { managerIds } = req.body;
+
+    if (!managerIds) return res.status(400).json({ message: "managerIds required" });
+    if (!Array.isArray(managerIds)) managerIds = [managerIds];
+
+    const validIds = managerIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length !== managerIds.length) {
+      return res.status(400).json({ message: "Invalid manager id(s) detected" });
+    }
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $pullAll: { projectExtras: validIds } },
+        { new: true }
+      )
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error removing project managers:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+/* -------------------------------- activities ------------------------------- */
+
+export const addActivity = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { name, description, startDate, dueDate, status } = req.body;
+
+    const update = {
+      $push: {
+        activities: {
+          name,
+          description,
+          startDate,
+          dueDate,
+          status: status || "pending",
+        },
+      },
+    };
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(projectId, update, { new: true })
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.status(201).json(updated);
+  } catch (error) {
+    console.error("Error adding activity:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const updateActivity = async (req, res) => {
+  try {
+    const { projectId, activityId } = req.params;
+    const updates = req.body;
+
+    const project = await Project.findOneAndUpdate(
+      { _id: projectId, "activities._id": activityId },
+      {
+        $set: Object.fromEntries(
+          Object.entries(updates).map(([k, v]) => [`activities.$.${k}`, v])
+        ),
+      },
+      { new: true }
+    );
+
+    if (!project) return res.status(404).json({ message: "Activity or project not found" });
+
+    const populated = await populateProject(Project.findById(project._id));
+    return res.json(populated);
+  } catch (error) {
+    console.error("Error updating activity:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const deleteActivity = async (req, res) => {
+  try {
+    const { projectId, activityId } = req.params;
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $pull: { activities: { _id: activityId } } },
+        { new: true }
+      )
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error deleting activity:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+/* -------------------------------- employees -------------------------------- */
+
+export const addEmployee = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { name, role, wagePerDay, startDate, dueDate } = req.body;
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $push: { employees: { name, role, wagePerDay, startDate, dueDate } } },
+        { new: true }
+      )
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.status(201).json(updated);
+  } catch (error) {
+    console.error("Error adding employee:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const deleteEmployee = async (req, res) => {
+  try {
+    const { projectId, employeeId } = req.params;
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $pull: { employees: { _id: employeeId } } },
+        { new: true }
+      )
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error deleting employee:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+/* -------------------------------- documents -------------------------------- */
+
+export const uploadDocument = async (req, res) => {
+  try {
+    // TEMP LOGGING
+    // console.log("req.file:", req.file);
+    // console.log("req.body:", req.body);
+
+    const { projectId } = req.params;
+    const f = req.file || {};
+    const { url: bodyUrl, name } = req.body;
+
+    const fileUrl = bodyUrl || f.path || f.secure_url || f.url;
+    const displayName = name || f.originalname || f.filename || "Document";
+
+    if (!fileUrl) {
+      console.error("Upload error: missing file URL. file=", f);
+      return res.status(400).json({ message: "Missing document URL" });
+    }
+
+    const newDoc = { name: displayName, url: fileUrl, uploadedAt: new Date() };
+
+    const updated = await Project.findByIdAndUpdate(
+      projectId,
+      { $push: { documents: newDoc } },
+      { new: true }
+    )
+      .populate("projectManager", "fullName contactNumber")
+      .populate("projectExtras", "fullName contactNumber")
+      .populate("client", "fullName email contactNumber")
+      .lean();
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.status(201).json(updated);
+  } catch (error) {
+    console.error("Error uploading document:", error);
+    return res.status(500).json({ message: "Internal Server Error", error: error?.message });
+  }
+};
+
+export const deleteDocument = async (req, res) => {
+  try {
+    const { projectId, docId } = req.params;
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(
+        projectId,
+        { $pull: { documents: { _id: docId } } },
+        { new: true }
+      )
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error deleting document:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+/* ------------------------------- cover photo ------------------------------- */
+
+export const uploadCoverPhoto = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const imageUrl = req.body.url || req.file?.path || req.file?.secure_url || req.file?.url;
+    if (!imageUrl) return res.status(400).json({ message: "Missing image URL" });
+
+    const updated = await populateProject(
+      Project.findByIdAndUpdate(projectId, { imageUrl }, { new: true })
+    );
+
+    if (!updated) return res.status(404).json({ message: "Project not found" });
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error uploading cover photo:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
 };

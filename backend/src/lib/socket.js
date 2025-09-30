@@ -1,74 +1,95 @@
-// backend/src/lib/socket.js (FIXED VERSION)
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 
-let io; // Declare io globally but don't initialize here
-// IMPORTANT: Move userSocketMap to global scope so getReceiverSocketId can access it
-const userSocketMap = {}; // {userId: socketId} - used to store online users
+// Global references
+let io;
+// userId -> Set<socketId> (multi-tabs/devices)
+const userSockets = new Map(); // Map<string, Set<string>>
 
-// This function will be called from index.js to initialize Socket.IO
+function addUserSocket(userId, socketId) {
+  if (!userSockets.has(userId)) userSockets.set(userId, new Set());
+  userSockets.get(userId).add(socketId);
+}
+function removeUserSocket(userId, socketId) {
+  const set = userSockets.get(userId);
+  if (!set) return;
+  set.delete(socketId);
+  if (set.size === 0) userSockets.delete(userId);
+}
+function allOnlineUserIds() {
+  return Array.from(userSockets.keys());
+}
+
+// Parse JWT from handshake (auth.token preferred; cookie fallback)
+function authenticateSocket(socket) {
+  try {
+    const token =
+      socket.handshake?.auth?.token ||
+      socket.handshake?.headers?.cookie?.match(/token=([^;]+)/)?.[1];
+    if (!token) return null;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded?.userId || decoded?.id;
+    return userId ? String(userId) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function initSocketServer(httpServer, allowedOrigins) {
   io = new Server(httpServer, {
     cors: {
       origin: allowedOrigins,
       methods: ["GET", "POST"],
-      credentials: true
+      credentials: true,
     },
   });
 
   io.on("connection", (socket) => {
-    console.log("🔌 A user connected", socket.id);
+    const jwtUserId = authenticateSocket(socket);
+    const queryUserId = socket.handshake?.query?.userId;
+    const userId =
+      jwtUserId ||
+      (queryUserId && String(queryUserId) !== "undefined" ? String(queryUserId) : null);
 
-    const userId = socket.handshake.query.userId;
-    console.log("🔍 User ID from handshake:", userId);
-    
-    if (userId && userId !== "undefined") {
-      userSocketMap[userId] = socket.id;
-      console.log(`👤 User ${userId} mapped to socket ${socket.id}`);
-      console.log("🗺️ Current userSocketMap:", userSocketMap);
+    if (userId) {
+      addUserSocket(userId, socket.id);
+      socket.join(userId); // per-user room
+      // DEBUG: log room join
+      console.log("SOCKET JOIN -> user:", userId, "socket:", socket.id);
     }
 
-    // Emit updated online users list
-    const onlineUsers = Object.keys(userSocketMap);
-    console.log("👥 Broadcasting online users:", onlineUsers);
-    io.emit("getOnlineUsers", onlineUsers);
+    io.emit("getOnlineUsers", allOnlineUserIds());
 
     socket.on("disconnect", () => {
-      console.log("🔌 User disconnected", socket.id);
-      
-      // Find and remove the user from userSocketMap
-      for (const key in userSocketMap) {
-        if (userSocketMap[key] === socket.id) {
-          delete userSocketMap[key];
-          console.log(`👤 User ${key} removed from mapping`);
-          break;
-        }
-      }
-      
-      console.log("🗺️ Updated userSocketMap:", userSocketMap);
-      
-      // Emit updated online users list
-      const onlineUsers = Object.keys(userSocketMap);
-      console.log("👥 Broadcasting updated online users:", onlineUsers);
-      io.emit("getOnlineUsers", onlineUsers);
+      if (userId) removeUserSocket(userId, socket.id);
+      io.emit("getOnlineUsers", allOnlineUserIds());
     });
 
-    socket.on("chatMessage", (messageData) => {
-      console.log("📨 Received chat message:", messageData);
-      // You would typically process messageData (e.g., save to DB)
-      // Then emit it to the intended receiver or broadcast
-      // io.to(getReceiverSocketId(messageData.receiverId)).emit("newMessage", messageData);
+    // Optional relay if clients send messages via socket transport
+    socket.on("chatMessage", (payload) => {
+      const to = String(payload?.receiverId || "");
+      if (!to) return;
+      io.to(to).emit("message:received", payload);
     });
   });
 }
 
-// Now getReceiverSocketId can properly access userSocketMap
-export function getReceiverSocketId(userId) {
-  console.log(`🔍 Looking for socket ID for user: ${userId}`);
-  console.log("🗺️ Available users in map:", Object.keys(userSocketMap));
-  const socketId = userSocketMap[userId];
-  console.log(`🎯 Found socket ID: ${socketId}`);
-  return socketId;
+// Emit to all sockets of a specific user
+export function emitToUser(userId, event, data) {
+  if (!io || !userId) return;
+  // DEBUG: log emit target + payload receiver
+  const payloadReceiver = String(
+    typeof data?.receiverId === "object" ? data.receiverId?._id : data?.receiverId || ""
+  );
+  console.log("EMIT ->", event, "to user:", String(userId), "payload.receiverId:", payloadReceiver);
+  io.to(String(userId)).emit(event, data);
 }
 
-// Export io for direct usage by other modules (e.g., for emitting from routes)
+// Legacy helper (single socket id)
+export function getReceiverSocketId(userId) {
+  const set = userSockets.get(String(userId));
+  if (!set || set.size === 0) return undefined;
+  return Array.from(set)[0];
+}
+
 export { io };
