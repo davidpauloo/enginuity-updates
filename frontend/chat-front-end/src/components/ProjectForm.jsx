@@ -1,15 +1,17 @@
 // components/ProjectForm.jsx
-import React, { useState } from 'react';
-import axios from 'axios';
+import React, { useEffect, useState } from 'react';
+import { axiosInstance } from '../lib/axios';
 
 const ProjectForm = ({ onSubmit, onCancel }) => {
   const [formData, setFormData] = useState({
-    clientName: '',
+    clientId: '',
     location: '',
     description: '',
+    contactNumber: '',
     startDate: '',
     targetDeadline: ''
   });
+  const [clients, setClients] = useState([]);
 
   const [file, setFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -23,6 +25,18 @@ const ProjectForm = ({ onSubmit, onCancel }) => {
     setFile(e.target.files[0]);
   };
 
+  useEffect(() => {
+    const fetchClients = async () => {
+      try {
+        const res = await axiosInstance.get('/clients');
+        setClients(res.data || []);
+      } catch (err) {
+        console.error('Failed to load clients', err);
+      }
+    };
+    fetchClients();
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -34,7 +48,7 @@ const ProjectForm = ({ onSubmit, onCancel }) => {
         const formDataFile = new FormData();
         formDataFile.append('file', file);
 
-        const res = await axios.post('http://localhost:5001/api/upload', formDataFile);
+        const res = await axiosInstance.post('/upload', formDataFile);
         uploadedUrl = res.data.url;
         setIsUploading(false);
       }
@@ -55,11 +69,27 @@ const ProjectForm = ({ onSubmit, onCancel }) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="label">Client Name</label>
+        <label className="label">Client</label>
+        <select
+          name="clientId"
+          value={formData.clientId}
+          onChange={handleChange}
+          className="select select-bordered w-full"
+          required
+        >
+          <option value="" disabled>Select a client</option>
+          {clients.map((c) => (
+            <option key={c._id} value={c._id}>{c.name} ({c.email})</option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label">Contact Number</label>
         <input
           type="text"
-          name="clientName"
-          value={formData.clientName}
+          name="contactNumber"
+          value={formData.contactNumber}
           onChange={handleChange}
           className="input input-bordered w-full"
           required

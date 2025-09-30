@@ -1,28 +1,19 @@
-import { MessageSquare } from "lucide-react";
-
+// src/components/NoChatSelected.jsx
 const NoChatSelected = () => {
   return (
-    <div className="w-full flex flex-1 flex-col items-center justify-center p-16 bg-base-100/50">
-      <div className="max-w-md text-center space-y-6">
-        {/* Icon Display */}
-        <div className="flex justify-center gap-4 mb-4">
-          <div className="relative">
-            <div
-              className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center
-             justify-center animate-bounce"
-            >
-              <MessageSquare className="w-8 h-8 text-primary " />
-            </div>
-          </div>
-        </div>
-
-        {/* Welcome Text */}
-        <h2 className="text-2xl font-bold">Welcome to Enginuity!</h2>
-        <p className="text-base-content/60">
-          Select a conversation from the sidebar to start chatting
+    <section className="flex-1 flex items-center justify-center">
+      <div className="text-center space-y-2">
+        <img
+          src="/chat-empty.svg"
+          alt="No chat selected"
+          className="mx-auto w-28 h-28 opacity-70"
+        />
+        <h2 className="text-lg font-semibold">No chat selected</h2>
+        <p className="text-sm text-base-content/70">
+          Choose a client from the left to start messaging.
         </p>
       </div>
-    </div>
+    </section>
   );
 };
 

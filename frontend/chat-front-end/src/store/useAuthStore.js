@@ -1,4 +1,3 @@
-// src/store/useAuthStore.js
 import { create } from "zustand";
 import toast from "react-hot-toast";
 import { axiosInstance } from "../lib/axios.js";
@@ -15,14 +14,111 @@ export const useAuthStore = create((set, get) => ({
   onlineUsers: [],
   socket: null,
 
+  // Update profile: supports multipart avatar and JSON field updates
+  updateProfile: async (updates) => {
+    const { authUser } = get();
+    if (!authUser) {
+      toast.error("Not authenticated");
+      return;
+    }
+
+    // Accept one or two files: { file } or { file, coverFile }
+    const hasFile = !!updates?.file;
+    const hasCover = !!updates?.coverFile;
+    const isMultipart = hasFile || hasCover;
+
+    try {
+      set({ isUpdatingProfile: true });
+
+      let res;
+
+      if (isMultipart) {
+        // If backend updated to upload.fields for two files, send both.
+        // Otherwise, fallback to separate requests (see below).
+        const fd = new FormData();
+
+        if (hasFile) {
+          // MUST match backend field name
+          fd.append("profilePic", updates.file);
+        }
+        if (hasCover) {
+          // Backend must accept a second field (e.g., coverPhoto) via upload.fields
+          fd.append("coverPhoto", updates.coverFile);
+        }
+
+        res = await axiosInstance.put("/users/profile/picture", fd, {
+          // Let Axios infer boundary from FormData; header optional
+          // headers: { "Content-Type": "multipart/form-data" },
+          withCredentials: true,
+        });
+      } else {
+        // JSON-only profile updates
+        const body = {};
+        if (updates?.fullName) body.fullName = updates.fullName;
+        if (updates?.name) body.name = updates.name;
+        if (updates?.email) body.email = updates.email;
+        if (updates?.phone) body.phone = updates.phone;
+        if (updates?.bio) body.bio = updates.bio;
+        if (updates?.profilePic) body.profilePic = updates.profilePic;
+
+        res = await axiosInstance.put("/users/profile", body, {
+          withCredentials: true,
+        });
+      }
+
+      // Merge updated data into authUser
+      const updated = res?.data?.user ?? res?.data ?? {};
+      const current = get().authUser || {};
+      const merged = { ...current, ...updated };
+
+      // Ensure profilePic updated from direct avatar response
+      if (isMultipart && res?.data?.profilePic) {
+        merged.profilePic = res.data.profilePic;
+      }
+      // Optionally pick up coverPhoto URL if backend returns it
+      if (isMultipart && res?.data?.coverPhoto) {
+        merged.coverPhoto = res.data.coverPhoto;
+      }
+
+      set({ authUser: merged });
+      toast.success("Profile updated successfully");
+    } catch (err) {
+      console.error("Profile update failed:", err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Profile update failed";
+      toast.error(msg);
+      throw err;
+    } finally {
+      set({ isUpdatingProfile: false });
+    }
+  },
+
   checkAuth: async () => {
     try {
       const res = await axiosInstance.get("/auth/check");
       set({ authUser: res.data });
       get().connectSocket();
-    } catch (error) {
-      console.log("Error in checkAuth:", error);
-      set({ authUser: null });
+    } catch {
+      try {
+        const res = await axiosInstance.get("/superadmin-auth/check");
+        set({ authUser: res.data });
+        get().connectSocket();
+      } catch {
+        try {
+          const res = await axiosInstance.get("/projectmanager-auth/check");
+          set({ authUser: res.data });
+          get().connectSocket();
+        } catch {
+          try {
+            const res = await axiosInstance.get("/client-auth/check");
+            set({ authUser: res.data });
+          } catch (error) {
+            set({ authUser: null });
+          }
+        }
+      }
     } finally {
       set({ isCheckingAuth: false });
     }
@@ -36,7 +132,7 @@ export const useAuthStore = create((set, get) => ({
       toast.success("Account created successfully");
       get().connectSocket();
     } catch (error) {
-      toast.error(error.response.data.message);
+      toast.error(error.response?.data?.message || "Signup failed");
     } finally {
       set({ isSigningUp: false });
     }
@@ -44,108 +140,142 @@ export const useAuthStore = create((set, get) => ({
 
   login: async (data) => {
     set({ isLoggingIn: true });
+    let loginSuccessful = false;
+    let user = null;
+
     try {
       const res = await axiosInstance.post("/auth/login", data);
       set({ authUser: res.data });
-      toast.success("Logged in successfully");
-      get().connectSocket();
+      user = res.data;
+      loginSuccessful = true;
     } catch (error) {
-      toast.error(error.response.data.message);
+      try {
+        const res = await axiosInstance.post("/superadmin-auth/login", data);
+        set({ authUser: res.data });
+        user = res.data;
+        loginSuccessful = true;
+      } catch (superAdminErr) {
+        try {
+          const res = await axiosInstance.post(
+            "/projectmanager-auth/login",
+            data
+          );
+          set({ authUser: res.data });
+          user = res.data;
+          loginSuccessful = true;
+        } catch (projectManagerErr) {
+          try {
+            const res = await axiosInstance.post("/client-auth/login", data);
+            set({ authUser: res.data });
+            user = res.data;
+            loginSuccessful = true;
+          } catch (clientErr) {
+            const errorMessage =
+              clientErr.response?.data?.message ||
+              projectManagerErr.response?.data?.message ||
+              superAdminErr.response?.data?.message ||
+              error.response?.data?.message ||
+              "Login failed";
+            toast.error(errorMessage);
+          }
+        }
+      }
     } finally {
       set({ isLoggingIn: false });
+      if (loginSuccessful) {
+        toast.success("Logged in successfully");
+        get().connectSocket();
+        return user;
+      }
     }
   },
 
   logout: async () => {
     try {
-      await axiosInstance.post("/auth/logout");
-      set({ authUser: null });
-      toast.success("Logged out successfully");
-      get().disconnectSocket();
-    } catch (error) {
-      toast.error(error.response.data.message);
-    }
-  },
+      const currentUser = get().authUser;
 
-  updateProfile: async (data) => {
-    set({ isUpdatingProfile: true });
-    try {
-      const res = await axiosInstance.put("/auth/update-profile", data);
-      set({ authUser: res.data });
-      toast.success("Profile updated successfully");
+      if (currentUser) {
+        if (currentUser.role === "superadmin") {
+          try {
+            await axiosInstance.post("/superadmin-auth/logout");
+          } catch (error) {
+            console.error("SuperAdmin logout failed:", error);
+          }
+        } else if (currentUser.role === "project_manager") {
+          try {
+            await axiosInstance.post("/projectmanager-auth/logout");
+          } catch (error) {
+            console.error("Project Manager logout failed:", error);
+          }
+        } else if (currentUser.role === "client") {
+          try {
+            await axiosInstance.post("/client-auth/logout");
+          } catch (error) {
+            console.error("Client logout failed:", error);
+          }
+        } else {
+          try {
+            await axiosInstance.post("/auth/logout");
+          } catch (error) {
+            console.error("User logout failed:", error);
+          }
+        }
+      }
+
+      set({ authUser: null });
+      get().disconnectSocket();
+      toast.success("Logged out successfully");
     } catch (error) {
-      console.log("error in update profile:", error);
-      toast.error(error.response.data.message);
-    } finally {
-      set({ isUpdatingProfile: false });
+      console.error("Logout error:", error);
+      set({ authUser: null });
+      get().disconnectSocket();
+      toast.success("Logged out successfully");
     }
   },
 
   connectSocket: () => {
     const { authUser } = get();
-    // Prevent connecting if already connected or no authUser
-    if (!authUser || get().socket?.connected) {
-      console.log("🔌 Socket connection skipped:", { 
-        hasAuthUser: !!authUser, 
-        socketConnected: get().socket?.connected 
-      });
-      return;
-    }
-
-    console.log("🔌 Connecting to socket with user ID:", authUser._id);
-    console.log("🔌 Socket URL:", API_AND_SOCKET_BASE_URL);
+    if (!authUser) return;
 
     const socket = io(API_AND_SOCKET_BASE_URL, {
-      query: {
-        userId: authUser._id,
-      },
-      transports: ['websocket', 'polling'],
+      query: { userId: authUser._id },
+      withCredentials: true,
     });
 
-    set({ socket: socket });
-
-    // Socket event listeners
     socket.on("connect", () => {
-      console.log("✅ Connected to socket server:", socket.id);
+      console.log("Socket connected", socket.id, "user:", authUser._id);
     });
 
-    socket.on("getOnlineUsers", (userIds) => {
-      console.log("👥 Online users received:", userIds);
-      set({ onlineUsers: userIds });
+    socket.on("getOnlineUsers", (users) => {
+      set({ onlineUsers: users });
     });
 
-    // 🚨 MISSING EVENT LISTENER - This is what was causing the issue!
-    socket.on("newMessage", (newMessage) => {
-      console.log("📨 New message received via socket:", newMessage);
-      
-      // You need to update your chat messages here
-      // If you have a separate chat store, you should call it here
-      // For now, we'll just log it and you can integrate with your chat store
-      
-      // Example: If you have a useChatStore, you would do:
-      // const { addMessage } = useChatStore.getState();
-      // addMessage(newMessage);
-      
-      // For now, let's trigger a browser notification or toast
-      toast.success(`New message from ${newMessage.senderId}`);
+    socket.on("message:received", (p) => {
+      const rid =
+        typeof p?.receiverId === "object"
+          ? p?.receiverId?._id
+          : p?.receiverId;
+      console.log(
+        "[store] message:received -> socket:",
+        socket.id,
+        "receiverId:",
+        rid,
+        "mine:",
+        authUser._id
+      );
     });
 
-    socket.on("connect_error", (err) => {
-      console.error("❌ Socket connection error:", err.message);
-      console.error("❌ Full error:", err);
+    socket.on("disconnect", () => {
+      console.log("Socket disconnected");
     });
 
-    socket.on("disconnect", (reason) => {
-      console.log("🔌 Socket disconnected:", reason);
-      set({ socket: null, onlineUsers: [] });
-    });
+    set({ socket });
   },
 
   disconnectSocket: () => {
-    const currentSocket = get().socket;
-    if (currentSocket?.connected) {
-      console.log("🔌 Disconnecting socket");
-      currentSocket.disconnect();
+    const { socket } = get();
+    if (socket) {
+      socket.disconnect();
       set({ socket: null, onlineUsers: [] });
     }
   },

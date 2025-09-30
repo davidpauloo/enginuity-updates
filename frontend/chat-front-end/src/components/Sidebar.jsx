@@ -1,65 +1,76 @@
-import React, { useEffect } from 'react';
-import { useChatStore } from '../store/useChatStore';
-import SidebarSkeleton from './skeletons/SidebarSkeleton';
-import { Users } from 'lucide-react';
-import { useAuthStore } from '../store/useAuthStore';
+import { useMemo, useState } from "react";
 
-const Sidebar = () => {
-  const { getUsers, users, selectedUser, setSelectedUser, isUsersLoading } = useChatStore();
+const Sidebar = ({ users = [], selectedUser, onSelectUser, loading }) => {
+  const [q, setQ] = useState("");
 
-  const {onlineUsers} = useAuthStore()
+  const list = Array.isArray(users) ? users : [];
 
-  useEffect(() => {
-    getUsers();
-  }, [getUsers]);
-
-  if (isUsersLoading) return <SidebarSkeleton />;
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    const base = !term
+      ? list
+      : list.filter(
+          (u) =>
+            u?.fullName?.toLowerCase().includes(term) ||
+            u?.email?.toLowerCase().includes(term)
+        );
+  
+    // do NOT mutate base; sort a copy
+    const copy = base.slice();
+    copy.sort((a, b) => {
+      const ta = new Date(a?.lastActivity || a?.updatedAt || a?.createdAt || 0).getTime();
+      const tb = new Date(b?.lastActivity || b?.updatedAt || b?.createdAt || 0).getTime();
+      if (tb !== ta) return tb - ta;
+      return String(a?.fullName || "").localeCompare(String(b?.fullName || ""));
+    });
+    return copy;
+  }, [q, list]);
 
   return (
-    <aside className="h-full w-20 lg:w-72 border-r border-base-300 flex flex-col transition-all duration-200">
-      <div className="border-b border-base-300 w-full p-5">
-        <div className="flex items-center gap-2">
-          <Users className="size-6" />
-          <span className="font-medium hidden lg:block">Contacts</span>
-        </div>
-        {/* TODO: ONLINE filter toggle */}
+    <aside className="w-80 border-r border-base-300 flex flex-col">
+      <div className="p-3">
+        <input
+          className="input input-bordered w-full"
+          placeholder="Search users"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
-      <div className="overflow-y-auto w-full py-3">
-        {users.map((user) => (
-          <button
-            key={user._id}
-            onClick={() => setSelectedUser(user)}
-            className={`
-              w-full p-3 flex items-center gap-3
-              hover:bg-base-300 transition-colors
-              ${selectedUser?._id === user._id ? "bg-base-300 ring-1 ring-base-300" : ""}
-            `}
-          >
-            <div className="relative mx-auto lg:mx-0">
-              <img
-                src={user.profilePic || "/avatar.png"}
-                alt={user.name}
-                className="size-12 object-cover rounded-full"
-              />
-              {onlineUsers.includes(user._id) && (
-                <span
-                  className="absolute bottom-0 right-0 size-3 bg-green-500
-                    rounded-full ring-2 ring-zinc-900"
+      <div className="px-3 pb-2 text-xs text-base-content/60">
+        {(list?.length ?? 0)} people
+      </div>
+
+      <ul className="flex-1 overflow-auto">
+        {loading && <li className="px-3 py-2 text-sm text-base-content/60">Loading...</li>}
+        {!loading && filtered.length === 0 && (
+          <li className="px-3 py-2 text-sm text-base-content/60">No users</li>
+        )}
+        {!loading &&
+          filtered.map((u) => (
+            <li
+              key={u?._id}
+              className={`px-3 py-2 cursor-pointer hover:bg-base-200 ${
+                selectedUser?._id === u?._id ? "bg-base-200" : ""
+              }`}
+              onClick={() => onSelectUser?.(u)}
+            >
+              <div className="flex items-center gap-3">
+                <img
+                  className="w-9 h-9 rounded-full object-cover"
+                  src={u?.profilePic || "/avatar.png"}
+                  alt={u?.fullName || "User"}
                 />
-              )}
-            </div>
-
-            {/* User info - only visible on large screens */}
-            <div className="hidden lg:block text-left min-w-0">
-              <div className="font-medium truncate">{user.fullName}</div>
-              <div className="text-sm text-zinc-400">
-                {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+                <div className="min-w-0">
+                  <div className="truncate">{u?.fullName || "Unknown user"}</div>
+                  <div className="text-xs text-base-content/70 truncate">
+                    {u?.email || ""}
+                  </div>
+                </div>
               </div>
-            </div>
-          </button>
-        ))}
-      </div>
+            </li>
+          ))}
+      </ul>
     </aside>
   );
 };
