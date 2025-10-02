@@ -100,25 +100,8 @@ export const useAuthStore = create((set, get) => ({
       const res = await axiosInstance.get("/auth/check");
       set({ authUser: res.data });
       get().connectSocket();
-    } catch {
-      try {
-        const res = await axiosInstance.get("/superadmin-auth/check");
-        set({ authUser: res.data });
-        get().connectSocket();
-      } catch {
-        try {
-          const res = await axiosInstance.get("/projectmanager-auth/check");
-          set({ authUser: res.data });
-          get().connectSocket();
-        } catch {
-          try {
-            const res = await axiosInstance.get("/client-auth/check");
-            set({ authUser: res.data });
-          } catch (error) {
-            set({ authUser: null });
-          }
-        }
-      }
+    } catch (error) {
+      set({ authUser: null });
     } finally {
       set({ isCheckingAuth: false });
     }
@@ -140,88 +123,24 @@ export const useAuthStore = create((set, get) => ({
 
   login: async (data) => {
     set({ isLoggingIn: true });
-    let loginSuccessful = false;
-    let user = null;
-
     try {
       const res = await axiosInstance.post("/auth/login", data);
       set({ authUser: res.data });
-      user = res.data;
-      loginSuccessful = true;
+      toast.success("Logged in successfully");
+      get().connectSocket();
+      return res.data;
     } catch (error) {
-      try {
-        const res = await axiosInstance.post("/superadmin-auth/login", data);
-        set({ authUser: res.data });
-        user = res.data;
-        loginSuccessful = true;
-      } catch (superAdminErr) {
-        try {
-          const res = await axiosInstance.post(
-            "/projectmanager-auth/login",
-            data
-          );
-          set({ authUser: res.data });
-          user = res.data;
-          loginSuccessful = true;
-        } catch (projectManagerErr) {
-          try {
-            const res = await axiosInstance.post("/client-auth/login", data);
-            set({ authUser: res.data });
-            user = res.data;
-            loginSuccessful = true;
-          } catch (clientErr) {
-            const errorMessage =
-              clientErr.response?.data?.message ||
-              projectManagerErr.response?.data?.message ||
-              superAdminErr.response?.data?.message ||
-              error.response?.data?.message ||
-              "Login failed";
-            toast.error(errorMessage);
-          }
-        }
-      }
+      const errorMessage = error.response?.data?.message || "Login failed";
+      toast.error(errorMessage);
+      throw error;
     } finally {
       set({ isLoggingIn: false });
-      if (loginSuccessful) {
-        toast.success("Logged in successfully");
-        get().connectSocket();
-        return user;
-      }
     }
   },
 
   logout: async () => {
     try {
-      const currentUser = get().authUser;
-
-      if (currentUser) {
-        if (currentUser.role === "superadmin") {
-          try {
-            await axiosInstance.post("/superadmin-auth/logout");
-          } catch (error) {
-            console.error("SuperAdmin logout failed:", error);
-          }
-        } else if (currentUser.role === "project_manager") {
-          try {
-            await axiosInstance.post("/projectmanager-auth/logout");
-          } catch (error) {
-            console.error("Project Manager logout failed:", error);
-          }
-        } else if (currentUser.role === "client") {
-          try {
-            await axiosInstance.post("/client-auth/logout");
-          } catch (error) {
-            console.error("Client logout failed:", error);
-          }
-        } else {
-          try {
-            await axiosInstance.post("/auth/logout");
-          } catch (error) {
-            console.error("User logout failed:", error);
-          }
-        }
-      }
-
+      await axiosInstance.post("/auth/logout");
       set({ authUser: null });
       get().disconnectSocket();
       toast.success("Logged out successfully");
@@ -229,47 +148,54 @@ export const useAuthStore = create((set, get) => ({
       console.error("Logout error:", error);
       set({ authUser: null });
       get().disconnectSocket();
-      toast.success("Logged out successfully");
     }
   },
 
   connectSocket: () => {
-    const { authUser } = get();
-    if (!authUser) return;
-
-    const socket = io(API_AND_SOCKET_BASE_URL, {
-      query: { userId: authUser._id },
+    const { authUser, socket } = get();
+    if (!authUser || socket?.connected) return;
+  
+    // Disconnect old socket if exists
+    if (socket) {
+      socket.disconnect();
+    }
+  
+    // Get JWT token from cookie
+    const token = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('token='))
+      ?.split('=')[1];
+  
+    console.log("Connecting socket with token:", !!token);
+  
+    const newSocket = io(API_AND_SOCKET_BASE_URL, {
       withCredentials: true,
+      auth: {
+        token: token  // Send token in auth (backend expects this)
+      },
+      query: { 
+        userId: authUser._id  // Fallback for backend
+      }
     });
-
-    socket.on("connect", () => {
-      console.log("Socket connected", socket.id, "user:", authUser._id);
+  
+    newSocket.on("connect", () => {
+      console.log("Socket connected:", newSocket.id, "user:", authUser._id);
+      set({ socket: newSocket });
     });
-
-    socket.on("getOnlineUsers", (users) => {
+  
+    newSocket.on("connect_error", (error) => {
+      console.error("Socket connection error:", error.message);
+    });
+  
+    newSocket.on("getOnlineUsers", (users) => {
       set({ onlineUsers: users });
     });
-
-    socket.on("message:received", (p) => {
-      const rid =
-        typeof p?.receiverId === "object"
-          ? p?.receiverId?._id
-          : p?.receiverId;
-      console.log(
-        "[store] message:received -> socket:",
-        socket.id,
-        "receiverId:",
-        rid,
-        "mine:",
-        authUser._id
-      );
+  
+    newSocket.on("disconnect", (reason) => {
+      console.log("Socket disconnected:", reason);
     });
-
-    socket.on("disconnect", () => {
-      console.log("Socket disconnected");
-    });
-
-    set({ socket });
+  
+    set({ socket: newSocket });
   },
 
   disconnectSocket: () => {

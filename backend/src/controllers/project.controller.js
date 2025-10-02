@@ -85,7 +85,11 @@ export const getProjects = async (req, res) => {
     }
 
     const projects = await populateProject(Project.find(filter));
-    return res.json(projects);
+    
+    // Filter out projects with null/undefined client references (orphaned projects)
+    const validProjects = projects.filter(p => p.client !== null && p.client !== undefined);
+    
+    return res.json(validProjects);
   } catch (error) {
     console.error("Error fetching projects:", error);
     return res.status(500).json({ message: "Internal Server Error" });
@@ -101,6 +105,11 @@ export const getProjectById = async (req, res) => {
 
     const project = await populateProject(Project.findById(projectId));
     if (!project) return res.status(404).json({ message: "Project not found" });
+    
+    // Check if client reference is valid
+    if (!project.client) {
+      return res.status(404).json({ message: "Project has invalid client reference" });
+    }
 
     // ensure progress present (backend or derived)
     if (Array.isArray(project.activities) && project.activities.length > 0) {
@@ -117,6 +126,7 @@ export const getProjectById = async (req, res) => {
   }
 };
 
+// ... rest of your controller functions remain the same
 export const assignProjectManager = async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -220,8 +230,6 @@ export const removeProjectManagers = async (req, res) => {
   }
 };
 
-/* -------------------------------- activities ------------------------------- */
-
 export const addActivity = async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -296,8 +304,6 @@ export const deleteActivity = async (req, res) => {
   }
 };
 
-/* -------------------------------- employees -------------------------------- */
-
 export const addEmployee = async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -339,14 +345,8 @@ export const deleteEmployee = async (req, res) => {
   }
 };
 
-/* -------------------------------- documents -------------------------------- */
-
 export const uploadDocument = async (req, res) => {
   try {
-    // TEMP LOGGING
-    // console.log("req.file:", req.file);
-    // console.log("req.body:", req.body);
-
     const { projectId } = req.params;
     const f = req.file || {};
     const { url: bodyUrl, name } = req.body;
@@ -398,8 +398,6 @@ export const deleteDocument = async (req, res) => {
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
-
-/* ------------------------------- cover photo ------------------------------- */
 
 export const uploadCoverPhoto = async (req, res) => {
   try {

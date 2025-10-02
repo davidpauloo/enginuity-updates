@@ -1,36 +1,28 @@
 import { useState } from "react";
 import { Send } from "lucide-react";
-import { useAuthStore } from "../store/useAuthStore";
+import { useChatStore } from "../store/useChatStore";
 
 const MessageInput = ({ selectedUser, onSent }) => {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   
-  // Get current user for senderId
-  const authUser = useAuthStore((s) => s.authUser);
+  // Use store's sendMessage function
+  const sendMessageFromStore = useChatStore((s) => s.sendMessage);
 
   const sendMessage = async () => {
     const body = (text || "").trim();
     if (!body || !selectedUser?._id) return;
+    
     setSending(true);
     try {
-      const res = await fetch(`/api/messages/${selectedUser._id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ text: body }),
+      await sendMessageFromStore({ text: body });
+      
+      // Notify parent component
+      onSent?.({
+        text: body,
+        createdAt: new Date().toISOString(),
       });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        console.error(`Send failed ${res.status}: ${res.statusText} ${errText}`);
-        return;
-      }
-
-      const created = await res.json();
-
-      // ✅ The backend already populates senderId/receiverId, just use it as-is
-      onSent?.(created);
+      
       setText("");
     } catch (e) {
       console.error("sendMessage error:", e);

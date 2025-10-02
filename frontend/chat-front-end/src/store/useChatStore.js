@@ -46,7 +46,6 @@ export const useChatStore = create((set, get) => ({
     
     try {
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
-      // Optimistically add the message to the UI
       set({ messages: [...messages, res.data] });
     } catch (error) {
       console.error("Send message error:", error);
@@ -54,9 +53,15 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  // This function should be called whenever a user is selected
   subscribeToMessages: () => {
     const socket = useAuthStore.getState().socket;
+    
+    console.log("🔍 Socket status:", {
+      exists: !!socket,
+      connected: socket?.connected,
+      id: socket?.id
+    });
+    
     if (!socket) {
       console.log("❌ No socket available for message subscription");
       return;
@@ -65,14 +70,21 @@ export const useChatStore = create((set, get) => ({
     console.log("📨 Subscribing to socket messages");
 
     // Remove any existing listeners to prevent duplicates
-    socket.off("newMessage");
+    socket.off("message:received");
 
     // Add the new message listener
-    socket.on("newMessage", (newMessage) => {
-      console.log("📨 New message received in chat store:", newMessage);
+    socket.on("message:received", (newMessage) => {
+      console.log("🎯 SOCKET EVENT RECEIVED:", newMessage);
       
       const { selectedUser } = get();
       const { authUser } = useAuthStore.getState();
+      
+      console.log("📋 Checking relevance:", {
+        selectedUserId: selectedUser?._id,
+        authUserId: authUser?._id,
+        messageSenderId: newMessage.senderId,
+        messageReceiverId: newMessage.receiverId
+      });
       
       // Add message if it's part of the current conversation
       const isRelevantMessage = selectedUser && (
@@ -81,13 +93,12 @@ export const useChatStore = create((set, get) => ({
       );
 
       if (isRelevantMessage) {
-        console.log("📨 Adding message to current conversation");
+        console.log("✅ Adding message to current conversation");
         set((state) => ({
           messages: [...state.messages, newMessage],
         }));
       } else {
-        console.log("📨 Message not for current conversation, showing notification");
-        // Show notification for messages not in current conversation
+        console.log("⚠️ Message not for current conversation");
         if (newMessage.senderId !== authUser._id) {
           toast.success("New message received!");
         }
@@ -99,22 +110,19 @@ export const useChatStore = create((set, get) => ({
     const socket = useAuthStore.getState().socket;
     if (socket) {
       console.log("📨 Unsubscribing from socket messages");
-      socket.off("newMessage");
+      socket.off("message:received");
     }
   },
 
   setSelectedUser: (selectedUser) => {
     console.log("👤 Setting selected user:", selectedUser?.fullName);
+    console.log("🔌 Current socket connected:", useAuthStore.getState().socket?.connected);
     
-    // Unsubscribe from previous messages
     get().unsubscribeFromMessages();
-    
-    // Set the selected user and clear messages
     set({ selectedUser, messages: [] });
     
-    // Subscribe to new messages after setting the user
     setTimeout(() => {
       get().subscribeToMessages();
-    }, 100); // Small delay to ensure state is updated
+    }, 100);
   },
 }));

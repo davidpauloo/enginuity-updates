@@ -2,14 +2,16 @@
 import jwt from "jsonwebtoken";
 
 /**
- * Signs a JWT and sets it as an HttpOnly cookie on the response.
+ * Signs a JWT and optionally sets it as an HttpOnly cookie on the response.
  * Includes userId, userType (role), and platform ("web" | "mobile") claims.
+ * ⭐ MODIFIED: Only sets cookie for web platform, returns token for mobile.
  *
  * @param {string} userId
  * @param {import('express').Response} res
  * @param {string} userType - e.g. "superadmin" | "project_manager" | "client"
  * @param {string} platform - "web" | "mobile"
  * @param {object} opts - optional overrides
+ * @returns {string} token - JWT token string
  */
 export const generateToken = (
   userId,
@@ -19,26 +21,29 @@ export const generateToken = (
   opts = {}
 ) => {
   const {
-    expiresIn = "15d",           // token lifetime
-    cookieName = "token",        // cookie name
+    expiresIn = "15d",
+    cookieName = "token",
     cookieMaxAgeMs = 15 * 24 * 60 * 60 * 1000, // 15 days
-    sameSite = "Lax",            // Lax balances UX and CSRF protection
-    path = "/",                  // send cookie to entire site
+    sameSite = "Lax",
+    path = "/",
   } = opts;
 
   const payload = { userId, userType, platform };
 
   const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
 
-  res.cookie(cookieName, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite,                    // "Strict" or "Lax"; prefer "Lax" for typical SPA flows
-    maxAge: cookieMaxAgeMs,
-    path,
-  });
+  // ⭐ MODIFIED: Only set cookie for web platform
+  if (platform === "web") {
+    res.cookie(cookieName, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite,
+      maxAge: cookieMaxAgeMs,
+      path,
+    });
+  }
 
-  return token;
+  return token; // ⭐ Return token for mobile use
 };
 
 /**
@@ -57,7 +62,6 @@ export const clearAuthCookie = (res, opts = {}) => {
 
 /**
  * UI helper used by the frontend server-rendered views only.
- * Keep frontend React app free of JWT imports; do not import jsonwebtoken in the browser.
  */
 export function formatMessageTime(date) {
   return new Date(date).toLocaleTimeString("en-US", {

@@ -75,7 +75,7 @@ const LoginPage = () => {
               <span className="label-text font-medium">Username</span>
             </label>
             <input
-              type="email"
+              type="text"
               className="input input-bordered w-full"
               placeholder="you@example.com"
               value={formData.email}

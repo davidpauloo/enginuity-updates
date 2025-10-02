@@ -34,13 +34,15 @@ const app = express();
 const server = http.createServer(app);
 
 // Core middleware
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "2mb" })); // parses JSON bodies
 app.use(cookieParser());
 
 // CORS with credentials
 const allowedOrigins = [
   "http://localhost:5173",
   "https://enguinity-9.onrender.com",
+  "http://10.0.2.2:8081", 
+
 ];
 app.use(
   cors({
@@ -49,14 +51,14 @@ app.use(
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS: origin not allowed"), false);
     },
-    credentials: true,
+    credentials: true, // allow cookies for JWT auth
   })
 );
 
 // Health check
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// Static uploads
+// Static uploads (for any files you store locally)
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // API Routes
@@ -73,6 +75,26 @@ app.use("/api/pm", projectManagerRoutes);
 
 // Dev route (remove in production)
 app.use("/api/dev", devRoutes);
+
+// 404 JSON (place after all routes)
+app.use((req, res, next) => {
+  return res.status(404).json({ message: "Not Found" });
+});
+
+// Global error handler (must be last)
+app.use((err, req, res, next) => {
+  // Identify Multer errors explicitly so uploads return 4xx instead of generic 500
+  const isMulter = err && err.name === "MulterError";
+  const status = err?.status || (isMulter ? 400 : 500);
+
+  // Optional: normalize some common CORS/multipart errors
+  // if (err.message?.includes("CORS")) status = 403;
+
+  return res.status(status).json({
+    message: isMulter ? `Upload error: ${err.code}` : err.message || "Server error",
+    details: process.env.NODE_ENV !== "production" ? err : undefined,
+  });
+});
 
 // Serve frontend in production
 if (process.env.NODE_ENV === "production") {

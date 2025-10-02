@@ -9,14 +9,14 @@ const {
   MAIL_FROM,
 } = process.env;
 
-// One-time debug so you can verify what's actually loaded
+/*
 console.log("SMTP debug:", {
   host: SMTP_HOST,
   port: SMTP_PORT,
   user: SMTP_USER,
   from: MAIL_FROM,
 });
-
+*/
 let transporter;
 
 /**
@@ -65,11 +65,11 @@ export async function sendMail({ to, subject, html, text }) {
     const mailer = getMailer();
     
     // Verify transporter before sending
-    console.log("🔍 Verifying SMTP connection...");
+    console.log("Verifying SMTP connection...");
     await mailer.verify();
-    console.log("✅ SMTP connection verified");
+    console.log("SMTP connection verified");
     
-    console.log(`📧 Attempting to send email to: ${to}`);
+    console.log(`Attempting to send email to: ${to}`);
     const info = await mailer.sendMail({
       from: resolveFrom(),
       to,
@@ -78,7 +78,7 @@ export async function sendMail({ to, subject, html, text }) {
       html,
     });
     
-    console.log("✅ Email sent successfully:", {
+    console.log("Email sent successfully:", {
       messageId: info.messageId,
       accepted: info.accepted,
       rejected: info.rejected,
@@ -87,7 +87,7 @@ export async function sendMail({ to, subject, html, text }) {
     
     return info;
   } catch (error) {
-    console.error("❌ DETAILED EMAIL ERROR:", {
+    console.error("DETAILED EMAIL ERROR:", {
       message: error.message,
       code: error.code,
       command: error.command,
@@ -102,20 +102,56 @@ export async function sendMail({ to, subject, html, text }) {
 /**
  * Send newly-created account credentials.
  */
-export async function sendWelcomeCredentials({ to, fullName, email, tempPassword, role }) {
+export async function sendWelcomeCredentials({ to, fullName, username, tempPassword, role }) {
   const subject = "Your Enginuity account credentials";
   const html = `
-    <div style="font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.6">
-      <h2 style="margin:0 0 8px">Welcome to Enginuity</h2>
-      <p style="margin:0 0 12px">Hello ${fullName || "there"}, your ${role || "user"} account has been created.</p>
-      <div style="background:#f6f8fa;padding:12px 14px;border-radius:8px;margin:8px 0 12px">
-        <div>Email: <code>${email}</code></div>
-        <div>Temporary password: <code>${tempPassword}</code></div>
+    <div style="font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.6;max-width:600px">
+      <h2 style="margin:0 0 8px;color:#1976d2">Welcome to Enginuity</h2>
+      <p style="margin:0 0 12px;font-size:16px">Hello ${fullName || "there"}, your ${role === "project_manager" ? "Project Manager" : role === "client" ? "Client" : "user"} account has been created.</p>
+      
+      <div style="background:#f6f8fa;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #1976d2">
+        <div style="margin-bottom:12px">
+          <strong style="display:block;margin-bottom:4px;color:#424242">Username:</strong>
+          <code style="background:#fff;padding:8px 12px;border-radius:4px;display:inline-block;font-size:15px;color:#d32f2f;font-weight:600">${username}</code>
+        </div>
+        <div>
+          <strong style="display:block;margin-bottom:4px;color:#424242">Temporary Password:</strong>
+          <code style="background:#fff;padding:8px 12px;border-radius:4px;display:inline-block;font-size:15px;color:#d32f2f;font-weight:600">${tempPassword}</code>
+        </div>
       </div>
-      <p style="margin:0 0 8px">Please sign in and change your password immediately.</p>
+      
+      <div style="background:#fff3e0;padding:12px 16px;border-radius:8px;margin:16px 0;border-left:4px solid #ff9800">
+        <p style="margin:0;color:#e65100;font-weight:500">
+          <strong>Important:</strong> Please sign in using your <strong>username</strong> (not your email address) and change your password immediately for security.
+        </p>
+      </div>
+      
+      <p style="margin:16px 0 8px;font-size:14px;color:#666">
+        ${role === "client" ? "Use the Enginuity mobile app to sign in." : "Sign in at the Enginuity web portal."}
+      </p>
+      
+      <p style="margin:16px 0;font-size:13px;color:#999;border-top:1px solid #eee;padding-top:12px">
+        This email was sent to: ${to}
+      </p>
     </div>
   `;
-  return sendMail({ to, subject, html });
+  
+  const text = `
+Welcome to Enginuity
+
+Hello ${fullName || "there"}, your ${role === "project_manager" ? "Project Manager" : role === "client" ? "Client" : "user"} account has been created.
+
+Username: ${username}
+Temporary Password: ${tempPassword}
+
+IMPORTANT: Please sign in using your USERNAME (not your email address) and change your password immediately for security.
+
+${role === "client" ? "Use the Enginuity mobile app to sign in." : "Sign in at the Enginuity web portal."}
+
+This email was sent to: ${to}
+  `;
+  
+  return sendMail({ to, subject, html, text });
 }
 
 /**

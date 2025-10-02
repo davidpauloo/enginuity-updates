@@ -9,7 +9,7 @@ import { generateToken } from "../lib/utils.js";
 // ---------------------- SIGNUP (clients / PMs) ----------------------
 export const signup = async (req, res) => {
   try {
-    const { fullName, email, password, role, platform } = req.body; // platform optional here
+    const { fullName, email, password, role, platform } = req.body;
 
     if (!fullName || !email || !password || !role) {
       return res.status(400).json({ message: "All fields are required" });
@@ -22,8 +22,6 @@ export const signup = async (req, res) => {
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) return res.status(400).json({ message: "Email already exists" });
 
-    // Model pre-save also hashes; keep exactly one hash:
-    // Here we hash in controller because User pre-save already guards re-hash with isModified('password').
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUser = await User.create({
@@ -34,8 +32,8 @@ export const signup = async (req, res) => {
       isActive: true,
     });
 
-    // token userType = role
-    generateToken(newUser._id, res, role, platform || "web");
+    // Generate token and get it back for mobile
+    const token = generateToken(newUser._id, res, role, platform || "web");
 
     res.status(201).json({
       _id: newUser._id,
@@ -43,6 +41,7 @@ export const signup = async (req, res) => {
       email: newUser.email,
       role: newUser.role,
       profilePic: newUser.profilePic,
+      token: platform === "mobile" ? token : undefined, // ⭐ Return token for mobile
     });
   } catch (error) {
     console.error("❌ Signup error:", error.message);
@@ -51,9 +50,10 @@ export const signup = async (req, res) => {
 };
 
 // ---------------------- LOGIN (all roles) ----------------------
+// ---------------------- LOGIN (all roles) ----------------------
 export const login = async (req, res) => {
   try {
-    const { email, password, platform } = req.body; // 'web' | 'mobile'
+    const { email, password, platform } = req.body;
     if (!email || !password || !platform) {
       return res.status(400).json({ message: "email, password, and platform are required" });
     }
@@ -82,33 +82,37 @@ export const login = async (req, res) => {
       }
     }
 
+    // 3) Check if user exists
     if (!user) {
-      // Avoid revealing whether email exists
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // 3) Check lockout
+    // 4) ⭐ MOVED: Enforce platform policy AFTER we know the role
+    if (userRole === "client" && platform === "web") {
+      return res.status(403).json({ message: "Client accounts can only sign in on mobile." });
+    }
+    
+    if (userRole !== "client" && platform === "mobile") {
+      return res.status(403).json({ message: "Only client accounts can sign in on mobile." });
+    }
+
+    // 5) Check lockout
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       return res.status(423).json({ message: "Account temporarily locked" });
     }
 
-    // 4) Verify password via bcrypt
+    // 6) Verify password via bcrypt
     const passwordMatches = await bcrypt.compare(password, user.password);
     if (!passwordMatches) {
       user.loginAttempts = (user.loginAttempts || 0) + 1;
       if (user.loginAttempts >= 5) {
-        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
       }
       await user.save();
       return res.status(400).json({ message: "Username or password is wrong" });
     }
 
-    // 5) Enforce platform policy: clients not allowed on web
-    if (userRole === "client" && platform === "web") {
-      return res.status(403).json({ message: "Client accounts can only sign in on mobile." });
-    }
-
-    // 6) Reset attempts and update last login (save only if changed)
+    // 7) Reset attempts and update last login
     if (user.loginAttempts || user.lockedUntil || !user.lastLogin) {
       user.loginAttempts = 0;
       user.lockedUntil = null;
@@ -116,10 +120,10 @@ export const login = async (req, res) => {
       await user.save();
     }
 
-    // 7) Issue JWT cookie with role + platform
-    generateToken(user._id, res, userRole, platform);
+    // 8) Issue JWT cookie with role + platform and get token back
+    const token = generateToken(user._id, res, userRole, platform);
 
-    // 8) Respond with minimal safe profile
+    // 9) ⭐ Return token in response body for mobile
     return res.status(200).json({
       _id: user._id,
       fullName: user.fullName,
@@ -128,6 +132,7 @@ export const login = async (req, res) => {
       profilePic: user.profilePic,
       permissions: userRole === "superadmin" ? user.permissions : undefined,
       lastLogin: user.lastLogin,
+      token: platform === "mobile" ? token : undefined,
     });
   } catch (error) {
     console.error("❌ Login error:", error.message);
@@ -189,7 +194,7 @@ export const checkAuth = (req, res) => {
   }
 };
 
-// ---------------------- UPDATE PASSWORD (self-service when logged in) ----------------------
+// ---------------------- UPDATE PASSWORD ----------------------
 const STRONG_PASSWORD_REGEX =
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-={}\[\]|;:'",.<>/?`~]).{8,}$/;
 
@@ -210,7 +215,6 @@ export const updatePassword = async (req, res) => {
       });
     }
 
-    // Determine whether this is a SuperAdmin or regular User
     let entity = null;
     if (req.userType === "superadmin") {
       entity = await SuperAdmin.findById(req.user._id);
@@ -227,8 +231,7 @@ export const updatePassword = async (req, res) => {
       return res.status(400).json({ message: "Current password is incorrect." });
     }
 
-    // Single hashing path: if model has pre-save hook, assign plaintext; else hash here
-    entity.password = newPassword; // SuperAdmin & User models should hash in pre-save
+    entity.password = newPassword;
     entity.loginAttempts = 0;
     entity.lockedUntil = null;
 
@@ -241,10 +244,10 @@ export const updatePassword = async (req, res) => {
   }
 };
 
-// ---------------------- FORGOT PASSWORD (no email; queues admin request) ----------------------
+// ---------------------- FORGOT PASSWORD ----------------------
 export const forgotPassword = async (req, res) => {
   try {
-    const { identifier } = req.body; // email or username if added later
+    const { identifier } = req.body;
     const generic = { message: "If the account exists, a reset request has been queued." };
 
     if (!identifier) return res.status(200).json(generic);
@@ -254,7 +257,7 @@ export const forgotPassword = async (req, res) => {
 
     if (user) {
       await AdminResetRequest.create({
-        managerUserId: user._id, // can be generalized to userId later
+        managerUserId: user._id,
         status: "pending",
         requestedAt: new Date(),
         notes: "Initiated via public forgot-password (no email).",
@@ -268,7 +271,7 @@ export const forgotPassword = async (req, res) => {
   }
 };
 
-// ---------------------- SET SUPER ADMIN PASSWORD (authenticated SA only) ----------------------
+// ---------------------- SET SUPER ADMIN PASSWORD ----------------------
 export const setSuperAdminPassword = async (req, res) => {
   try {
     if (req.userType !== "superadmin") {
@@ -294,7 +297,6 @@ export const setSuperAdminPassword = async (req, res) => {
       return res.status(404).json({ message: "Super Admin not found." });
     }
 
-    // Single hashing path: SuperAdmin model should hash on save
     sa.password = newPassword;
     sa.loginAttempts = 0;
     sa.lockedUntil = null;

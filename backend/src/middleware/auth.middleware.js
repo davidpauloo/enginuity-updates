@@ -4,13 +4,23 @@ import User from "../models/user.model.js";
 import SuperAdmin from "../models/superAdmin.model.js";
 
 /**
-  Verifies JWT from cookie, loads the principal (SuperAdmin or User),
-  enforces platform policy, and invalidates sessions if password
-  changed after token issuance (using passwordChangedAt) [OWASP-aligned].
+  Verifies JWT from cookie or Authorization header (for mobile),
+  loads the principal (SuperAdmin or User), enforces platform policy,
+  and invalidates sessions if password changed after token issuance.
  */
 const protectRoute = async (req, res, next) => {
   try {
-    const token = req.cookies?.token;
+    // ⭐ MODIFIED: Check both cookie and Authorization header
+    let token = req.cookies?.token;
+    
+    // If no cookie, check Authorization header (for mobile)
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7); // Remove 'Bearer ' prefix
+      }
+    }
+
     if (!token) {
       return res.status(401).json({ message: "Not authorized, no token" });
     }
@@ -21,12 +31,10 @@ const protectRoute = async (req, res, next) => {
     // Load principal based on token userType
     let principal;
     if (decoded.userType === "superadmin") {
-      // Super Admin lives in separate collection
       principal = await SuperAdmin.findById(decoded.userId);
       if (!principal) {
         return res.status(401).json({ message: "Not authorized, token failed" });
       }
-      // Normalize as a user-like object with role for RBAC and controllers
       req.user = { ...principal.toObject(), role: "superadmin" };
     } else {
       principal = await User.findById(decoded.userId);
@@ -40,13 +48,12 @@ const protectRoute = async (req, res, next) => {
     req.platform = decoded.platform || "web";
     req.userType = decoded.userType || (decoded.userType === "superadmin" ? "superadmin" : "user");
 
-    // Enforce policy: block clients on web (as in controllers/login)
+    // Enforce policy: block clients on web
     if (req.platform === "web" && req.user?.role === "client") {
       return res.status(403).json({ message: "Access denied for client on web" });
     }
 
     // Invalidate session if password changed after token was issued
-    // decoded.iat is seconds since epoch
     const issuedAtSec = decoded.iat;
     const entity = req.user;
     if (entity && typeof entity.changedPasswordAfter === "function") {
@@ -54,7 +61,6 @@ const protectRoute = async (req, res, next) => {
         return res.status(401).json({ message: "Session expired. Please login again." });
       }
     } else if (entity?.passwordChangedAt) {
-      // Fallback if method not present (e.g., SuperAdmin model)
       const pwdChangedAtSec = Math.floor(new Date(entity.passwordChangedAt).getTime() / 1000);
       if (pwdChangedAtSec > issuedAtSec) {
         return res.status(401).json({ message: "Session expired. Please login again." });

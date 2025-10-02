@@ -4,33 +4,53 @@ import jwt from "jsonwebtoken";
 // Global references
 let io;
 // userId -> Set<socketId> (multi-tabs/devices)
-const userSockets = new Map(); // Map<string, Set<string>>
+const userSockets = new Map();
 
 function addUserSocket(userId, socketId) {
   if (!userSockets.has(userId)) userSockets.set(userId, new Set());
   userSockets.get(userId).add(socketId);
 }
+
 function removeUserSocket(userId, socketId) {
   const set = userSockets.get(userId);
   if (!set) return;
   set.delete(socketId);
   if (set.size === 0) userSockets.delete(userId);
 }
+
 function allOnlineUserIds() {
   return Array.from(userSockets.keys());
 }
 
-// Parse JWT from handshake (auth.token preferred; cookie fallback)
+// ⭐ MODIFIED: Enhanced token extraction for mobile support
 function authenticateSocket(socket) {
   try {
-    const token =
-      socket.handshake?.auth?.token ||
-      socket.handshake?.headers?.cookie?.match(/token=([^;]+)/)?.[1];
-    if (!token) return null;
+    // Priority 1: Check socket handshake auth.token (mobile preferred)
+    let token = socket.handshake?.auth?.token;
+    
+    // Priority 2: Check query params (fallback)
+    if (!token) {
+      token = socket.handshake?.query?.token;
+    }
+    
+    // Priority 3: Check cookie (web)
+    if (!token) {
+      token = socket.handshake?.headers?.cookie?.match(/token=([^;]+)/)?.[1];
+    }
+    
+    if (!token) {
+      console.log("⚠️ Socket connection without token");
+      return null;
+    }
+
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const userId = decoded?.userId || decoded?.id;
+    
+    console.log("✅ Socket authenticated:", userId, "platform:", decoded?.platform || "unknown");
+    
     return userId ? String(userId) : null;
-  } catch {
+  } catch (error) {
+    console.error("❌ Socket auth failed:", error.message);
     return null;
   }
 }
@@ -53,15 +73,19 @@ export function initSocketServer(httpServer, allowedOrigins) {
 
     if (userId) {
       addUserSocket(userId, socket.id);
-      socket.join(userId); // per-user room
-      // DEBUG: log room join
-      console.log("SOCKET JOIN -> user:", userId, "socket:", socket.id);
+      socket.join(userId);
+      console.log("🔌 Socket connected -> user:", userId, "socket:", socket.id);
+    } else {
+      console.log("⚠️ Socket connected without authentication");
     }
 
     io.emit("getOnlineUsers", allOnlineUserIds());
 
     socket.on("disconnect", () => {
-      if (userId) removeUserSocket(userId, socket.id);
+      if (userId) {
+        removeUserSocket(userId, socket.id);
+        console.log("🔌 Socket disconnected -> user:", userId, "socket:", socket.id);
+      }
       io.emit("getOnlineUsers", allOnlineUserIds());
     });
 
@@ -77,11 +101,10 @@ export function initSocketServer(httpServer, allowedOrigins) {
 // Emit to all sockets of a specific user
 export function emitToUser(userId, event, data) {
   if (!io || !userId) return;
-  // DEBUG: log emit target + payload receiver
   const payloadReceiver = String(
     typeof data?.receiverId === "object" ? data.receiverId?._id : data?.receiverId || ""
   );
-  console.log("EMIT ->", event, "to user:", String(userId), "payload.receiverId:", payloadReceiver);
+  console.log("📤 EMIT ->", event, "to user:", String(userId), "payload.receiverId:", payloadReceiver);
   io.to(String(userId)).emit(event, data);
 }
 
