@@ -22,8 +22,11 @@ import payrollRecordRoutes from "./routes/payrollRecord.routes.js";
 import payrollRoutes from "./routes/payroll.routes.js";
 import projectManagerRoutes from "./routes/projectManager.routes.js";
 import devRoutes from "./routes/dev.routes.js";
+import videoRoutes from "./routes/videos.routes.js";
+
 
 dotenv.config();
+
 
 const PORT = process.env.PORT || 5001;
 
@@ -72,6 +75,7 @@ app.use("/api/items", itemRoutes);
 app.use("/api/payroll-records", payrollRecordRoutes);
 app.use("/api/payrolls", payrollRoutes);
 app.use("/api/pm", projectManagerRoutes);
+app.use(videoRoutes);
 
 // Dev route (remove in production)
 app.use("/api/dev", devRoutes);
